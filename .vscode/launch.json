@@ -1,0 +1,26 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/home/ayden-linux/Repos/unifi_talk_ai/sync_recordings.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--remote-host", "unifi-router", 
+                "--remote-path", "/volume1/.srv/unifi-talk/recordings",
+                "--whisper-model", "large-v3-turbo",
+                "--speaker-left", "shop_employee",
+                "--speaker-right", "customer",
+                "--force",
+                "--whisper-batch-size", "64"
+
+            ]
+        }
+    ]
+}

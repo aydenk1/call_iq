@@ -1,0 +1,22 @@
+name: torch-cu130
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ffmpeg
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - tqdm
+  - ipython
+  - jupyterlab
+  - pip:
+      - --index-url https://download.pytorch.org/whl/cu130
+      - --extra-index-url https://pypi.org/simple
+      - torch==2.9.0
+      - torchvision==0.24.0
+      - torchaudio==2.9.0
+      - openai-whisper>=20231117
+      - faster-whisper>=1.2.1
