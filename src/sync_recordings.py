@@ -74,7 +74,7 @@ def main(argv: Sequence[str]) -> int:
     transcriber = WhisperTranscribe(
         input_root=args["recording_dir"],
         output_root=args["whisper_dir"],
-        model_name=args["whisper_dir"],
+        model_name=args["whisper-model"],
         language=args["whisper_language"],
         batch_size=args["batch_size"],
         overwrite=args["overwrite"]
