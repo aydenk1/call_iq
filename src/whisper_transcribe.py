@@ -28,7 +28,6 @@ class WhisperTranscribe:
         output_root: Path,
         overwrite: bool = False,
         model_name: str = "large-v3-turbo",
-        device: str | None = "cuda",
         language: str | None = "en",
         batch_size: int = 64,
     ) -> None:
@@ -44,7 +43,6 @@ class WhisperTranscribe:
         self.merge_segments_s: float | None = None
 
         self.batch_size = batch_size
-        self.requested_device = device
         self.num_workers = max(1, (os.cpu_count() or 2))
         self.device = self._resolve_device()
         self.compute_type = self._default_compute_type(self.device)
@@ -52,7 +50,7 @@ class WhisperTranscribe:
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
 
-        self.segment_metadata_passthrough_keys = {"start", "end", "text","avg_logprob", "compression_ratio", "no_speech_prob"," temperature"}
+        self.segment_metadata_passthrough_keys = {"start", "end", "text","avg_logprob", "compression_ratio", "no_speech_prob","temperature"}
 
     def iter_inputs(self, exts: Iterable[str] = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")) -> list[Path]:
         """Yield every input audio file that matches the provided extensions."""
@@ -403,7 +401,7 @@ class WhisperTranscribe:
                 store = json.loads(store_path.read_text())
                 timestamp = json.loads(timestamp.read_text())
             except Exception:
-                logging.exception(f"Failed to read transcript JSON under {call_dir}", call_dir)
+                logging.exception(f"Failed to read transcript JSON under {call_dir}")
                 continue
 
             transcripts = [customer, store]
@@ -437,7 +435,7 @@ class WhisperTranscribe:
                 "conversation_text": conversation_text,
             }
             payload.update(recording_metadata)
-            payload["segments_with_channel"] = segments_with_channel,
+            payload["segments_with_channel"] = segments_with_channel
 
             out_json.write_text(json.dumps(payload, indent=2))
             out_txt.write_text(conversation_text + "\n")
