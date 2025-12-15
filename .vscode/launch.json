@@ -9,7 +9,7 @@
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
-            "program": "/home/ayden-linux/Repos/unifi_talk_ai/sync_recordings.py",
+            "program": "/home/ayden-linux/Repos/call_iq/src/main.py",
             "console": "integratedTerminal",
             "args": [
                 "--remote-host", "unifi-router", 
@@ -17,8 +17,8 @@
                 "--whisper-model", "large-v3-turbo",
                 "--speaker-left", "shop_employee",
                 "--speaker-right", "customer",
-                "--force",
-                "--whisper-batch-size", "64"
+                //"--overwrite",
+                "--batch-size", "64"
 
             ]
         }

@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import dataclasses
+
 import json
 import logging
 import os
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, Iterable
+from datetime import datetime, timezone
 
+from faster_whisper import BatchedInferencePipeline, WhisperModel
+from faster_whisper.transcribe import Segment, Word
 from tqdm import tqdm
 
 from subprocess_pool import SubprocessPool
-
-from faster_whisper import WhisperModel, BatchedInferencePipeline
-from faster_whisper.transcribe import Segment, Word
 
 try:
     import torch
@@ -39,7 +40,8 @@ class WhisperTranscribe:
 
         self.model_name = model_name
         self.language = language
-        self.decode_options = {}
+        self.decode_options = {"vad_parameters": {"min_silence_duration_ms": 3000}}
+        self.merge_segments_s: float | None = None
 
         self.batch_size = batch_size
         self.requested_device = device
@@ -50,16 +52,23 @@ class WhisperTranscribe:
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
 
+        self.segment_metadata_passthrough_keys = {"start", "end", "text","avg_logprob", "compression_ratio", "no_speech_prob"," temperature"}
+
     def iter_inputs(self, exts: Iterable[str] = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")) -> list[Path]:
         """Yield every input audio file that matches the provided extensions."""
         exts = tuple(e.lower() for e in exts)
         return sorted([p for p in self.input_root.rglob("*") if p.is_file() and p.suffix.lower() in exts])
-
-    def out_paths(self, src: Path) -> tuple[Path, Path]:
-        """Return output paths for the left and right channels derived from src."""
+    
+    def whisper_out_path(self, src: Path):
+        """Return output folder for whisper to work in given an input path"""
         rel = src.relative_to(self.input_root)
         stem = rel.with_suffix("")  # drop input extension
         base = self.output_root / stem
+        return base
+
+    def out_paths(self, src: Path) -> tuple[Path, Path]:
+        """Return output paths for the left and right channels derived from src."""
+        base = self.whisper_out_path(src)
         base.mkdir(parents=True, exist_ok=True)
         left = base / "customer.wav"  # left
         right = base / "store.wav"        # right
@@ -94,19 +103,20 @@ class WhisperTranscribe:
             str(out_right),
         ]
 
-    def build_commands(self) -> list[list[str]]:
+    def build_commands(self) -> tuple[list[list[str]], list[Path]]:
         """Assemble split commands for any recordings that still need processing."""
         cmds: list[list[str]] = []
-        for src in self.iter_inputs():
+        src_files = self.iter_inputs()
+        for src in src_files:
             out_left, out_right = self.out_paths(src)
             if not self.overwrite and out_left.exists() and out_right.exists():
                 continue
             cmds.append(self.ffmpeg_split_cmd(src, out_left, out_right))
-        return cmds
+        return cmds, src_files
     
     def preprocess_audio(self) -> None:
         """Split every stereo recording into normalized mono speaker channels."""
-        commands = self.build_commands()
+        commands, src_files = self.build_commands()
         if not commands:
             logging.info("No new recordings require channel splitting.")
             return
@@ -120,11 +130,20 @@ class WhisperTranscribe:
         )
         results = pool.run(commands)
 
+        for src in src_files:
+            timestamp_file = self.whisper_out_path(src) / "timestamp.json"
+            timestamp = src.stat().st_mtime
+            timestamp_file.write_text(json.dumps({
+                "datetime_utc": datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
+                "datetime_ep": timestamp
+                }))
+
         failed = [r for r in results if r.rc != 0]
         logging.info("Split complete. total=%d failed=%d", len(results), len(failed))
         if failed:
             logging.error("Example failure cmd: %s", " ".join(failed[0].cmd))
             logging.error("stderr: %s", failed[0].stderr.strip())
+        
     
     @staticmethod
     def _resolve_device() -> str:
@@ -180,6 +199,7 @@ class WhisperTranscribe:
         kwargs.setdefault("log_progress", False)
         # Preserve timestamps by default just like WhisperModel.transcribe.
         kwargs.setdefault("without_timestamps", False)
+        
         return {k: v for k, v in kwargs.items() if v is not None}
 
     def _transcribe_file(
@@ -239,41 +259,104 @@ class WhisperTranscribe:
             example_audio, example_exc = failed[0]
             logging.error("Example transcription failure %s: %s", example_audio, example_exc)
 
-    def _segments_to_dicts(self, segments: list[Segment]) -> list[dict[str, Any]]:
-        """Convert Segment objects into dictionaries ready for JSON."""
-        output: list[dict[str, Any]] = []
-        for seg in segments:
-            output.append(dataclasses.asdict(seg))
-            # item: dict[str, Any] = {
-            #     "id": seg.id,
-            #     "seek": seg.seek,
-            #     "start": seg.start,
-            #     "end": seg.end,
-            #     "text": seg.text,
-            #     "tokens": seg.tokens,
-            #     "temperature": seg.temperature,
-            #     "avg_logprob": seg.avg_logprob,
-            #     "compression_ratio": seg.compression_ratio,
-            #     "no_speech_prob": seg.no_speech_prob,
-            # }
-            # words: list[Word] | None = getattr(seg, "words", None)
-            # if words:
-            #     item["words"] = [
-            #         {
-            #             "start": w.start,
-            #             "end": w.end,
-            #             "word": w.word,
-            #             "probability": w.probability,
-            #         }
-            #         for w in words
-            #     ]
-            # output.append(item)
-        return output
+    def merge_segments(self, segments: list[dict], gap_threshold_s: float = 2.0) -> list[dict[str, Any]]:
+        """
+        Merge adjacent whisper segments into larger utterances.
+
+        Assumptions:
+        - Segments belong to a single speaker/channel (no speaker switching here).
+        - Segment dicts contain at least: {"start": float, "end": float, "text": str}.
+        - Two consecutive segments are stitched when their gap is <= gap_threshold_s (secs).
+
+        NOTE Not tested, will need to passthrough all information as well.
+        
+        Returns a compact list of utterances suitable for downstream data extraction.
+        """
+        if not segments:
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for idx, seg in enumerate(segments):
+            if not isinstance(seg, dict):
+                continue
+            start = seg.get("start", None)
+            end = seg.get("end", None)
+            text = seg.get("text", "")
+
+            try:
+                start_f = float(start)
+                end_f = float(end)
+            except (TypeError, ValueError):
+                continue
+
+            if end_f < start_f:
+                logging.info("Segment end is before start! %s", seg)
+                continue
+
+            text_s = str(text).strip()
+            if not text_s:
+                continue
+
+            normalized.append(
+                {
+                    "start": start_f,
+                    "end": end_f,
+                    "text": text_s,
+                    "_source_index": idx,
+                }
+            )
+
+        if not normalized:
+            return []
+
+        normalized.sort(key=lambda s: (s["start"], s["end"]))
+        merged: list[dict[str, Any]] = []
+
+        cur_start = normalized[0]["start"]
+        cur_end = normalized[0]["end"]
+        cur_text_parts: list[str] = [normalized[0]["text"]]
+        cur_source_indices: list[int] = [normalized[0]["_source_index"]]
+
+        for seg in normalized[1:]:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            seg_text = seg["text"]
+
+            gap = seg_start - cur_end
+            if gap <= gap_threshold_s:
+                cur_text_parts.append(seg_text)
+                cur_end = max(cur_end, seg_end)
+                cur_source_indices.append(seg["_source_index"])
+            else:
+                merged.append(
+                    {
+                        "start": cur_start,
+                        "end": cur_end,
+                        "midpoint": (cur_start + cur_end) / 2.0,
+                        "text": " ".join(cur_text_parts).strip(),
+                    }
+                )
+                cur_start = seg_start
+                cur_end = seg_end
+                cur_text_parts = [seg_text]
+                cur_source_indices = [seg["_source_index"]]
+
+        merged.append(
+            {
+                "start": cur_start,
+                "end": cur_end,
+                "midpoint": (cur_start + cur_end) / 2.0,
+                "text": " ".join(cur_text_parts).strip(),
+            }
+        )
+
+        return merged
 
     def _write_transcript(self, audio_path: Path, info: Any, segments: list[Segment]) -> None:
         """Write the transcription metadata and segments to disk as JSON."""
         transcript_path = audio_path.with_suffix(".json")
         text = " ".join(seg.text.strip() for seg in segments).strip()
+        segments_raw = [dataclasses.asdict(seg) for seg in segments]
         payload = {
             "audio_file": str(audio_path),
             "channel": audio_path.stem,
@@ -282,11 +365,89 @@ class WhisperTranscribe:
             "language": getattr(info, "language", None),
             "language_probability": getattr(info, "language_probability", None),
             "duration": getattr(info, "duration", None),
-            "segments": self._segments_to_dicts(segments),
+            "segments": segments_raw,
         }
+        if self.merge_segments_s is not None:
+            payload["merged_segments"] = self.merge_segments(segments_raw, gap_threshold_s=self.merge_segments_s)
         transcript_path.write_text(json.dumps(payload, indent=2))
 
+    def postprocess_transcripts(self) -> list[Path]:
+        """
+        Stitch `customer.json` + `store.json` into a single, time-ordered conversation.
+
+        Writes per-call outputs next to the channel transcripts:
+        - `conversation.json`: structured timeline plus raw per-channel segments
+        - `conversation.txt`: LLM-friendly "Speaker: text" transcript
+        """
+        written: list[Path] = []
+        
+        audio_file_metadata = {"audio_file", "model", "language"}
+        if not self.output_root.exists():
+            return written
+
+        for call_dir in sorted([p for p in self.output_root.iterdir() if p.is_dir()]):
+            customer_path = call_dir / "customer.json"
+            store_path = call_dir / "store.json"
+            timestamp = call_dir / "timestamp.json"
+            if not customer_path.exists() or not store_path.exists() or not timestamp.exists():
+                logging.error(f"One of these paths does not exist for transcription merging\n{customer_path}\n{store_path}")
+                continue
+
+            out_json = call_dir / "conversation.json"
+            out_txt = call_dir / "conversation.txt"
+            if not self.overwrite and out_json.exists():
+                continue
+
+            try:
+                customer = json.loads(customer_path.read_text())
+                store = json.loads(store_path.read_text())
+                timestamp = json.loads(timestamp.read_text())
+            except Exception:
+                logging.exception(f"Failed to read transcript JSON under {call_dir}", call_dir)
+                continue
+
+            transcripts = [customer, store]
+            segments_with_channel = []
+            recording_metadata = {}
+            for tr in transcripts:
+                channel = str(tr.get("channel"))
+                recording_metadata[f"{channel}_metadata"] = {key: tr[key] for key in audio_file_metadata}
+                for seg in tr.get("segments", []):
+                    seg_w_metadata = {k: v for k, v in seg.items() if k in self.segment_metadata_passthrough_keys}
+                    seg_w_metadata["channel"] = channel
+                    segments_with_channel.append(seg_w_metadata)
+
+            segments_with_channel.sort(key=lambda t: (t["start"], t["end"], t["channel"]))
+            conversation_text = "\n".join([f'{t["channel"]}: {t["text"]}' for t in segments_with_channel]).strip()
+
+            duration = None
+            try:
+                duration = max(
+                    float(customer.get("duration") or 0.0),
+                    float(store.get("duration") or 0.0),
+                )
+            except (TypeError, ValueError):
+                duration = None
+
+            payload = {
+                "call_id": call_dir.name,
+                "call_datetime_utc": timestamp["datetime_utc"],
+                "call_datetime_ep": timestamp["datetime_ep"],
+                "duration": duration,
+                "conversation_text": conversation_text,
+            }
+            payload.update(recording_metadata)
+            payload["segments_with_channel"] = segments_with_channel,
+
+            out_json.write_text(json.dumps(payload, indent=2))
+            out_txt.write_text(conversation_text + "\n")
+            written.extend([out_json, out_txt])
+
+        logging.info("Postprocess complete. calls=%d outputs=%d", len(written) // 2, len(written))
+        return written
+    
     def run(self) -> None:
         """Execute the full pipeline: split audio then transcribe outputs."""
         self.preprocess_audio()
         self.transcribe_outputs()
+        self.postprocess_transcripts()

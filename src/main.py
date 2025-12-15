@@ -49,7 +49,7 @@ def parse_args(argv: Sequence[str]) -> dict:
     if not args.remote_host or not args.remote_path:
         parser.error("Remote host and remote path are required (set via args or UNIFI_REMOTE_* env vars).")
 
-    work_dir = Path(__file__).resolve().parent / "data"
+    work_dir = Path(__file__).resolve().parent.parent / "data"
     recording_dir = work_dir / "recordings"
     whisper_dir = work_dir / "whisper"
     default_args = {
@@ -57,7 +57,7 @@ def parse_args(argv: Sequence[str]) -> dict:
         "recording_dir": str(recording_dir),
         "whisper_dir": str(whisper_dir)
     }
-    default_args.update({k: v for k, v in vars(args) if v is not None})
+    default_args.update({k: v for k, v in vars(args).items() if v is not None})
     return default_args
 
 def main(argv: Sequence[str]) -> int:
@@ -74,7 +74,7 @@ def main(argv: Sequence[str]) -> int:
     transcriber = WhisperTranscribe(
         input_root=args["recording_dir"],
         output_root=args["whisper_dir"],
-        model_name=args["whisper-model"],
+        model_name=args["whisper_model"],
         language=args["whisper_language"],
         batch_size=args["batch_size"],
         overwrite=args["overwrite"]
