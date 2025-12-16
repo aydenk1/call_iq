@@ -1,0 +1,21 @@
+services:
+  call_iq:
+    image: call_iq:${IMAGE_TAG}
+    build: .
+    command: sleep infinity
+    tty: true
+    working_dir: /app
+    volumes:
+      - .:/app
+      - call_iq_cache:/root/.cache
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+      WHISPER_MODEL: ${WHISPER_MODEL}
+      WHISPER_DEVICE: ${WHISPER_DEVICE}
+      UNIFI_REMOTE_HOST: ${UNIFI_REMOTE_HOST}
+      UNIFI_REMOTE_PATH: ${UNIFI_REMOTE_PATH}
+
+volumes:
+  call_iq_cache:

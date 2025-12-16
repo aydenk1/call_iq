@@ -16,10 +16,6 @@ from tqdm import tqdm
 
 from subprocess_pool import SubprocessPool
 
-try:
-    import torch
-except ImportError:  # pragma: no cover - torch is available via env.yml
-    torch = None  # type: ignore[assignment]
 
 class WhisperTranscribe:
     def __init__(
@@ -44,7 +40,7 @@ class WhisperTranscribe:
 
         self.batch_size = batch_size
         self.num_workers = max(1, (os.cpu_count() or 2))
-        self.device = self._resolve_device()
+        self.device = os.environ.get("WHISPER_DEVICE") or self._resolve_device()
         self.compute_type = self._default_compute_type(self.device)
 
         self._model: WhisperModel | None = None
@@ -146,12 +142,18 @@ class WhisperTranscribe:
     @staticmethod
     def _resolve_device() -> str:
         """Return the best available device (CUDA, MPS, or CPU)."""
-        if torch is not None:
-            if torch.cuda.is_available():
-                return "cuda"
-            has_mps = getattr(torch.backends, "mps", None)
-            if has_mps and torch.backends.mps.is_available():
-                return "mps"
+        try:
+            import ctranslate2  # type: ignore
+        except Exception:  # pragma: no cover - optional dependency detail
+            ctranslate2 = None  # type: ignore[assignment]
+
+        if ctranslate2 is not None:
+            try:
+                if int(ctranslate2.get_cuda_device_count()) > 0:
+                    return "cuda"
+            except Exception:
+                pass
+
         return "cpu"
 
     def _default_compute_type(self, device: str) -> str:

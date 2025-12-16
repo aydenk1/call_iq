@@ -9,7 +9,7 @@
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
-            "program": "/home/ayden-linux/Repos/call_iq/src/main.py",
+            "program": "/app/src/main.py",
             "console": "integratedTerminal",
             "args": [
                 "--remote-host", "unifi-router", 

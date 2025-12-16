@@ -1,0 +1,28 @@
+{
+  "name": "call-iq",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "call_iq",
+  "workspaceFolder": "/app",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance", "ms-python.debugpy", "openai.chatgpt"],
+      "settings": {
+        "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+        "python.analysis.exclude": ["**/data/**"],
+        "files.watcherExclude": {
+          "**/data/**": true
+        },
+        "search.exclude": {
+          "**/data/**": true
+        }
+      }
+    }
+  },
+  "mounts": [
+    "source=${env:SSH_AUTH_SOCK},target=/ssh-agent,type=bind",
+    "source=vscode-server,target=/root/.vscode-server,type=volume"
+  ],
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": "/ssh-agent"
+  }
+}

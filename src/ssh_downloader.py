@@ -35,6 +35,7 @@ class SSHDownloader:
         self.ssh_base = [
             "ssh",
             "-oBatchMode=yes",
+            "-oStrictHostKeyChecking=accept-new",
             "-oServerAliveInterval=15",
             "-oServerAliveCountMax=3",
             self.remote_host,
