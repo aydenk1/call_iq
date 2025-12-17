@@ -10,21 +10,21 @@ RUN echo "PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\
 # Runtime deps:
 # - ffmpeg: audio splitting/resampling
 # - openssh-client: optional rsync/ssh download step
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
     gnupg2 \
-    lsb-release
+    lsb-release \
     openssh-client \
     unzip \
-    wget \
+    wget 
 
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/$(lsb_release -cs)/x86_64/cuda-keyring_1.1-1_all.deb && \
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \
     apt-get update && \
-    apt-get install -y cuda-runtime-12-4 libcudnn9 libcudnn9-dev && \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y cuda-runtime-12-8 libcudnn9-cuda-12 libcudnn9-dev-cuda-12 && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
