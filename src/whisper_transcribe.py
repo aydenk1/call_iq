@@ -9,12 +9,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterable
 from datetime import datetime, timezone
+from dataclasses import dataclass
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel
 from faster_whisper.transcribe import Segment, Word
 from tqdm import tqdm
+import ctranslate2
 
 from subprocess_pool import SubprocessPool
+
+
+
+@dataclass
+class ConversationSegment:
+    pass
+
 
 
 class WhisperTranscribe:
@@ -40,7 +49,11 @@ class WhisperTranscribe:
 
         self.batch_size = batch_size
         self.num_workers = max(1, (os.cpu_count() or 2))
-        self.device = os.environ.get("WHISPER_DEVICE") or self._resolve_device()
+        device_env = os.environ.get("WHISPER_DEVICE", "").strip().lower()
+        if "auto" in device_env or "" == device_env:
+            self.device = self._resolve_device()
+        else:
+            self.device = device_env
         self.compute_type = self._default_compute_type(self.device)
 
         self._model: WhisperModel | None = None
@@ -141,19 +154,12 @@ class WhisperTranscribe:
     
     @staticmethod
     def _resolve_device() -> str:
-        """Return the best available device (CUDA, MPS, or CPU)."""
+        """Return the best available device (CUDA or CPU)."""
         try:
-            import ctranslate2  # type: ignore
-        except Exception:  # pragma: no cover - optional dependency detail
-            ctranslate2 = None  # type: ignore[assignment]
-
-        if ctranslate2 is not None:
-            try:
-                if int(ctranslate2.get_cuda_device_count()) > 0:
-                    return "cuda"
-            except Exception:
-                pass
-
+            if int(ctranslate2.get_cuda_device_count()) > 0:
+                return "cuda"
+        except Exception:
+            pass
         return "cpu"
 
     def _default_compute_type(self, device: str) -> str:

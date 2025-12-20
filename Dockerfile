@@ -38,14 +38,17 @@ RUN set -eux; \
 Host unifi-router
     HostName 192.168.1.1
     User root
-    IdentityAgent /ssh-agent
-    IdentityFile /root/.ssh/github.pub
+    IdentityFile /root/.ssh/id_ed25519
     PreferredAuthentications publickey
+    IdentitiesOnly yes
 EOF
 RUN chmod 600 /root/.ssh/config
-COPY "${SSH_PUBKEY}" /root/.ssh/
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
 
 
 # ENTRYPOINT ["python", "src/main.py"]
 #CMD ["--help"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash", "-l"]
