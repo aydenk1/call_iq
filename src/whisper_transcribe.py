@@ -19,6 +19,11 @@ import ctranslate2
 from subprocess_pool import SubprocessPool
 
 
+@dataclass
+class Transcript:
+    metadata : dict
+    segments: list[ConversationSegment]
+
 
 @dataclass
 class ConversationSegment:
@@ -373,8 +378,6 @@ class WhisperTranscribe:
             "duration": getattr(info, "duration", None),
             "segments": segments_raw,
         }
-        if self.merge_segments_s is not None:
-            payload["merged_segments"] = self.merge_segments(segments_raw, gap_threshold_s=self.merge_segments_s)
         transcript_path.write_text(json.dumps(payload, indent=2))
 
     def postprocess_transcripts(self) -> list[Path]:
@@ -412,6 +415,9 @@ class WhisperTranscribe:
                 logging.exception(f"Failed to read transcript JSON under {call_dir}")
                 continue
 
+            # Merge segements if split up
+            if self.merge_segments_s is not None:
+                payload["merged_segments"] = self.merge_segments([], gap_threshold_s=self.merge_segments_s)
             transcripts = [customer, store]
             segments_with_channel = []
             recording_metadata = {}
