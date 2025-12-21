@@ -20,3 +20,4 @@ dependencies:
       - torchaudio==2.9.0
       - openai-whisper>=20231117
       - faster-whisper>=1.2.1
+      - PyYAML

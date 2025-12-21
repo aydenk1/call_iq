@@ -1,0 +1,32 @@
+remote_host: ""
+remote_path: ""
+work_dir: data
+recording_dir: data/recordings
+whisper_dir: data/whisper
+whisper_model: large-v3-turbo
+whisper_language: en
+batch_size: 16
+whisper_workers: null
+force_preprocess: false
+force_transcribe: false
+force_postprocess: false
+no_sync: false
+verbose: false
+merge_segments_s: 2.0
+vad_min_silence_duration_ms: 1200
+# initial_prompt: >-
+#  This is a phone call for an auto and appliance shop, known as Oswalt-Thomas or Goodyear.
+#  We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service.
+#  Common names: Ayden, Zach, Eric.
+# hotwords:
+#  - Oswalt-Thomas
+#  - Goodyear
+#  - Wabash
+#  - GE
+#  - tires
+#  - appliances
+#   - alignment
+#   - service
+#   - Ayden
+#   - Zach
+#   - Eric

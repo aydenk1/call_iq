@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+import time
 from typing import Iterable, Optional
 
 @dataclass
@@ -73,12 +74,12 @@ class SubprocessPool:
                         finished_proc = proc
                         break
 
-                # If none finished yet, block on one
+                # If none finished yet, briefly sleep and re-check to avoid blocking.
                 if finished_proc is None:
-                    finished_proc = next(iter(running.keys()))
-                    rc = finished_proc.wait()
-                else:
-                    rc = finished_proc.poll()  # already finished
+                    time.sleep(0.1)
+                    continue
+
+                rc = finished_proc.poll()  # already finished
 
                 cmd = running.pop(finished_proc)
 

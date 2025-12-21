@@ -6,7 +6,7 @@
     "configurations": [
 
         {
-            "name": "Python Debugger: Current File",
+            "name": "Python Debugger: Run Pipeline",
             "type": "debugpy",
             "request": "launch",
             "program": "/app/src/main.py",
@@ -18,8 +18,18 @@
                 "--speaker-left", "shop_employee",
                 "--speaker-right", "customer",
                 //"--overwrite",
-                "--batch-size", "64"
+                "--batch-size", "64",
+                "--force-postprocess"
 
+            ]
+        },
+        {
+            "name": "Python Debugger: Download Unifi Transcripts",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/app/src/unifi_transcription_api.py",
+            "console": "integratedTerminal",
+            "args": [
             ]
         }
     ]
