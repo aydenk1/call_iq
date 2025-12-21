@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import dataclasses
-
 import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Self
-from datetime import datetime, timezone
-from dataclasses import dataclass
 
-from faster_whisper import BatchedInferencePipeline, WhisperModel
-from faster_whisper.transcribe import Segment, Word
-from tqdm import tqdm
 import ctranslate2
+from faster_whisper import BatchedInferencePipeline, WhisperModel
+from faster_whisper.transcribe import Segment
+from tqdm import tqdm
 
 from subprocess_pool import SubprocessPool
 
@@ -149,61 +148,36 @@ class WhisperTranscribe:
         self,
         input_root: Path,
         output_root: Path,
-        force_preprocess: bool = False,
-        force_transcribe: bool = False,
-        force_postprocess: bool = False,
-        model_name: str = "large-v3-turbo",
-        language: str | None = "en",
-        batch_size: int = 64,
-        num_workers: int | None = None,
-        initial_prompt: str | None = None,
-        hotwords: list[str] | str | None = None,
-        merge_segments_s: float | None = 2.0,
-        vad_min_silence_duration_ms: int = 3000,
+        model_name: str,
+        num_workers: int | str,
+        device: str,
+        batch_size: int,
+        merge_segments_s: float | None,
+        force: dict[str, bool],
+        whisper_model_kwargs: dict[str, Any]
     ) -> None:
         """Configure the transcription pipeline and ensure output directories exist."""
-        self.input_root = Path(input_root)
-        self.output_root = Path(output_root)
+        self.input_root: Path = Path(input_root)
+        self.output_root: Path = Path(output_root)
         self.output_root.mkdir(parents=True, exist_ok=True)
 
-        self.force_preprocess = force_preprocess
-        self.force_transcribe = force_transcribe or force_preprocess # Ensure rest of pipeline runs if earlier options are forced
-        self.force_postprocess = force_postprocess or force_transcribe
+        self.model_name: str = model_name
+        self.batch_size: int = batch_size
 
-        self.model_name = model_name
-        self.language = language
-        self.initial_prompt = initial_prompt
-        if isinstance(hotwords, list):
-            self.hotwords = " ".join(hotwords)
-        else:
-            self.hotwords = hotwords
-        self.decode_options = {
-            "no_speech_threshold": 0.95,
-            "log_prob_threshold": -1.0,
-            "compression_ratio_threshold": 2.2,
-            "chunk_length":15,
-            "vad_parameters": {
-                "min_silence_duration_ms": vad_min_silence_duration_ms,
-                "speech_pad_ms": 50,
-                },
-            
-            }
+        self.num_workers: int = self._resolve_cpu_count(num_workers)
+        self.device: str = self._resolve_device(device) 
+        self.compute_type: str = self._default_compute_type(self.device)
         self.merge_segments_s = merge_segments_s
+        
+        # Ensure rest of pipeline runs if earlier options are forced
+        self.force_preprocess: bool = force["preprocess"]
+        self.force_transcribe: bool = force["transcribe"] or self.force_preprocess
+        self.force_postprocess: bool = force["postprocess"] or self.force_transcribe
 
-        self.batch_size = batch_size
-        resolved_workers = num_workers if num_workers is not None else (os.cpu_count() or 2)
-        self.num_workers = max(1, resolved_workers)
-        device_env = os.environ.get("WHISPER_DEVICE", "").strip().lower()
-        if "auto" in device_env or "" == device_env:
-            self.device = self._resolve_device()
-        else:
-            self.device = device_env
-        self.compute_type = self._default_compute_type(self.device)
+        self.whisper_model_kwargs: dict[str, Any] = whisper_model_kwargs
 
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
-
-        self.segment_metadata_passthrough_keys = {"start", "end", "text","avg_logprob", "compression_ratio", "no_speech_prob","temperature"}
 
     def iter_inputs(self, exts: Iterable[str] = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")) -> list[Path]:
         """Yield every input audio file that matches the provided extensions."""
@@ -299,16 +273,27 @@ class WhisperTranscribe:
             logging.error("Example failure cmd: %s", " ".join(failed[0].cmd))
             logging.error("stderr: %s", failed[0].stderr.strip())
         
-    
     @staticmethod
-    def _resolve_device() -> str:
+    def _resolve_device(device) -> str:
         """Return the best available device (CUDA or CPU)."""
+        if device != "auto":
+            return device
         try:
             if int(ctranslate2.get_cuda_device_count()) > 0:
                 return "cuda"
         except Exception:
             pass
         return "cpu"
+    
+    @staticmethod
+    def _resolve_cpu_count(num_workers) -> int:
+        if num_workers != "auto":
+            return num_workers
+        
+        cpu_count = os.cpu_count()
+        if cpu_count is None:
+            return 1
+        return cpu_count
 
     def _default_compute_type(self, device: str) -> str:
         """Pick an efficient compute precision for the given device."""
@@ -326,7 +311,7 @@ class WhisperTranscribe:
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
-                cpu_threads=max(1, os.cpu_count() or 1),
+                cpu_threads=self.num_workers,
             )
             self._pipeline = None  # reset pipeline so it can be rebuilt with the new model
         return self._model
@@ -343,20 +328,6 @@ class WhisperTranscribe:
         exts = tuple(e.lower() for e in exts)
         outputs = [p for p in self.output_root.rglob("*") if p.is_file() and p.suffix.lower() in exts]
         return sorted(outputs)
-
-    def _transcribe_kwargs(self) -> dict[str, Any]:
-        """Build the kwargs dict forwarded to faster-whisper."""
-        kwargs: dict[str, Any] = {**self.decode_options}
-        if self.language:
-            kwargs.setdefault("language", self.language)
-        # Suppress the built-in tqdm bar because we already show progress externally.
-        kwargs.setdefault("log_progress", False)
-        # Preserve timestamps by default just like WhisperModel.transcribe.
-        kwargs.setdefault("without_timestamps", False)
-        kwargs.setdefault("initial_prompt", self.initial_prompt)
-        kwargs.setdefault("hotwords", self.hotwords)
-        
-        return {k: v for k, v in kwargs.items() if v is not None}
 
     def _transcribe_file(
         self,
@@ -388,15 +359,14 @@ class WhisperTranscribe:
 
         pipeline = self._load_pipeline()
         failed: list[tuple[Path, Exception]] = []
-        transcribe_kwargs = self._transcribe_kwargs()
         with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
-            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+            with ThreadPoolExecutor(max_workers=self.num_workers // 2) as executor:
                 future_to_audio = {
                     executor.submit(
                         self._transcribe_file,
                         pipeline,
                         audio_path,
-                        transcribe_kwargs=transcribe_kwargs,
+                        transcribe_kwargs=self.whisper_model_kwargs,
                     ): audio_path
                     for audio_path in targets
                 }

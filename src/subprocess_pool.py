@@ -1,10 +1,12 @@
-from tqdm import tqdm
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Iterable, Optional
+
+from tqdm import tqdm
+
 
 @dataclass
 class ProcResult:

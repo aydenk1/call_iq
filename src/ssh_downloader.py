@@ -118,7 +118,7 @@ class SSHDownloader:
 
             try:
                 with tqdm(total=total_size, unit="B", unit_scale=True, desc="Downloading") as pbar:
-                    for n in iter(lambda: remote_prod.stdout.readinto(buf), 0):
+                    for n in iter(lambda: remote_prod.stdout.readinto(buf), 0): # type: ignore
                         try:
                             local_cons.stdin.write(mv[:n])
                         except BrokenPipeError:

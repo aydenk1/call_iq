@@ -12,15 +12,6 @@
             "program": "/app/src/main.py",
             "console": "integratedTerminal",
             "args": [
-                "--remote-host", "unifi-router", 
-                "--remote-path", "/volume1/.srv/unifi-talk/recordings",
-                "--whisper-model", "large-v3-turbo",
-                "--speaker-left", "shop_employee",
-                "--speaker-right", "customer",
-                //"--overwrite",
-                "--batch-size", "64",
-                "--force-postprocess"
-
             ]
         },
         {

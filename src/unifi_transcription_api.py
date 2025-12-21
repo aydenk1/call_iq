@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from requests.packages.urllib3.exceptions import InsecureRequestWarning # pyright: ignore[reportMissingImports]
 
 
 def dump_all_transcripts(
@@ -24,7 +24,7 @@ def dump_all_transcripts(
     Stops when a page returns no items.
     """
     # Silence warning from verify=False (curl --insecure)
-    requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+    requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning) # pyright: ignore[reportAttributeAccessIssue]
 
     session = requests.Session()
     session.verify = False  # same as curl --insecure

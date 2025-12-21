@@ -1,32 +1,55 @@
-remote_host: ""
-remote_path: ""
-work_dir: data
-recording_dir: data/recordings
-whisper_dir: data/whisper
-whisper_model: large-v3-turbo
-whisper_language: en
-batch_size: 16
-whisper_workers: null
-force_preprocess: false
-force_transcribe: false
-force_postprocess: false
-no_sync: false
-verbose: false
-merge_segments_s: 2.0
-vad_min_silence_duration_ms: 1200
-# initial_prompt: >-
-#  This is a phone call for an auto and appliance shop, known as Oswalt-Thomas or Goodyear.
-#  We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service.
-#  Common names: Ayden, Zach, Eric.
-# hotwords:
-#  - Oswalt-Thomas
-#  - Goodyear
-#  - Wabash
-#  - GE
-#  - tires
-#  - appliances
-#   - alignment
-#   - service
-#   - Ayden
-#   - Zach
-#   - Eric
+global:
+  work_dir: "data"
+  recording_dir: "recordings" # work_dir / recording_dir
+  whisper_dir: "whisper" # work_dir / whisper_dir
+  verbose: true # logging level
+
+ssh: # Required for syncing new calls
+  skip: false # Use true to skip downloading of new calls
+  remote_host: "unifi-router"
+  remote_path: "/volume1/.srv/unifi-talk/recordings"
+  
+whisper:
+  model_name: "large-v3"
+  batch_size: 16
+  num_workers: "auto" # Uses all cpu cores
+  device: "auto" # Uses cuda if available, fallback to cpu
+  merge_segments_s: 2.0 # Set to null to skip segment mergeing
+  force: # Forces reprocessing of the whisper pipeline
+    preprocess: false
+    transcribe: false
+    postprocess: false
+  whisper_model_kwargs:
+    no_speech_threshold: 0.6 # (default is already 0.6)
+    log_prob_threshold: -1.0 # (keep)
+    compression_ratio_threshold: 2.4 # (keep default) or tighten slightly
+    beam_size: 5 # (quality bump without getting weird)
+    best_of: 5 # (only used when temperature > 0; safe to include)
+    language: "en"
+    log_progress: false
+    patience: 1.0 # (don’t over-extend beams)
+    temperature: 0.0 # (deterministic)
+    without_timestamps: false
+    vad_parameters:
+      threshold: 0.55 # (slightly stricter than 0.5)
+      min_silence_duration_ms: 500 # (split sooner; default 2000 is huge)
+      speech_pad_ms: 120 # (default 400 is big)
+      min_speech_duration_ms: 200 # (throw away tiny blips)
+
+
+    # initial_prompt: >-
+    #  This is a phone call for an auto and appliance shop, known as Oswalt-Thomas or Goodyear.
+    #  We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service.
+    #  Common names: Ayden, Zach, Eric.
+    # hotwords: >-
+    #  Oswalt-Thomas
+    #  Goodyear
+    #  Wabash
+    #  GE
+    #  tires
+    #  appliances
+    #  alignment
+    #  service
+    #  Ayden
+    #  Zach
+    #  Eric
