@@ -12,6 +12,7 @@ RUN echo "PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\
 # - openssh-client: optional rsync/ssh download step
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    ca-certificates \
     ffmpeg \
     git \
     gnupg2 \
@@ -19,6 +20,15 @@ RUN apt-get update && \
     openssh-client \
     unzip \
     wget 
+
+# Node.js for web tooling (lint/types) inside the devcontainer
+RUN wget -qO- https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs
+
+# Web UI dependencies for dev server
+COPY web/package*.json /opt/web/
+RUN cd /opt/web && npm install
+
 
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb && \
     dpkg -i cuda-keyring_1.1-1_all.deb && \

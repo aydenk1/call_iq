@@ -41,3 +41,21 @@ Notes:
 ## Notes
 
 - PyTorch is not required for `faster-whisper`; GPU usage is enabled when `ctranslate2` detects CUDA.
+
+## UI (Next.js)
+
+The call analysis UI lives in `web/` and is currently wired to static sample data in `web/src/lib/sample-data.ts`.
+
+Requirements:
+- Node.js 20+
+- npm
+
+Run locally:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Then open `http://localhost:3000` and browse the call list and detail views.

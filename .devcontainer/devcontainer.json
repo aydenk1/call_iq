@@ -2,6 +2,8 @@
   "name": "call-iq",
   "dockerComposeFile": ["../docker-compose.yml"],
   "service": "call_iq",
+  "runServices": ["call_iq"],
+  "forwardPorts": [3000],
   "workspaceFolder": "/app",
   "customizations": {
     "vscode": {

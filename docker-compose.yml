@@ -6,6 +6,8 @@ services:
     tty: true
     working_dir: /app
     shm_size: "32g"
+    ports:
+      - "3000:3000"
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
@@ -13,6 +15,7 @@ services:
     volumes:
       - .:/app
       - call_iq_cache:/root/.cache
+      - call_iq_web_node_modules:/app/web/node_modules
     secrets:
       - ssh_private_key
       - ssh_public_key
@@ -21,6 +24,7 @@ services:
 
 volumes:
   call_iq_cache:
+  call_iq_web_node_modules:
 
 secrets:
   ssh_private_key:
