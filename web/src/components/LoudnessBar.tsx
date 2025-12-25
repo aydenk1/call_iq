@@ -17,15 +17,19 @@ export default function LoudnessBar({ durationSec, progress, label }: LoudnessBa
   } as CSSProperties;
 
   return (
-    <div className="mt-4">
-      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-muted">
+    <div className="space-y-3" style={style}>
+      <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-muted-foreground">
         <span>{label ?? "Audio spectrum"}</span>
         <span>{formatDuration(durationSec)}</span>
       </div>
-      <div className="spectrum mt-3" style={style}>
-        <div className="spectrum-progress" />
+      <div className="relative h-10 overflow-hidden rounded-full border bg-muted/40">
+        <div className="absolute inset-y-0 left-0 bg-primary/10" style={{ width: `var(--progress)` }} />
+        <div
+          className="absolute top-0 bottom-0 w-px bg-foreground/70"
+          style={{ left: `var(--playhead)` }}
+        />
       </div>
-      <input className="scrubber mt-3" type="range" min="0" max="100" defaultValue={percent} />
+      <input className="w-full accent-primary" type="range" min="0" max="100" defaultValue={percent} />
     </div>
   );
 }
