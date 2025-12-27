@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import LoudnessBar from "@/components/LoudnessBar";
+import AudioScrub from "@/components/AudioScrub";
 import Tag from "@/components/Tag";
 import Transcript from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
@@ -12,11 +12,13 @@ import { callRecords } from "@/lib/sample-data";
 import { getTagTone } from "@/lib/tag-tone";
 
 type CallDetailPageProps = {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 };
 
-export default function CallDetailPage({ params }: CallDetailPageProps) {
-  const call = callRecords.find((entry) => entry.id === params.id);
+export default async function CallDetailPage({ params }: CallDetailPageProps) {
+  const { id } = await params;
+  const callId = decodeURIComponent(id);
+  const call = callRecords.find((entry) => entry.id === callId);
 
   if (!call) {
     notFound();
@@ -64,11 +66,7 @@ export default function CallDetailPage({ params }: CallDetailPageProps) {
               <CardTitle>Audio scrub and transcript</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <LoudnessBar
-                durationSec={call.audio.durationSec}
-                progress={call.audio.previewProgress}
-                label="Loudness spectrum"
-              />
+              <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
               <Transcript segments={call.transcript} />
             </CardContent>
           </Card>
@@ -194,4 +192,8 @@ export default function CallDetailPage({ params }: CallDetailPageProps) {
       </section>
     </main>
   );
+}
+
+export function generateStaticParams() {
+  return callRecords.map((call) => ({ id: call.id }));
 }

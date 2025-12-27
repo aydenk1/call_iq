@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Fragment, useMemo, useState } from "react";
 
-import LoudnessBar from "@/components/LoudnessBar";
+import AudioScrub from "@/components/AudioScrub";
 import Tag from "@/components/Tag";
 import Transcript from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
@@ -111,11 +111,7 @@ export default function CallTable({ calls }: CallTableProps) {
                 <TableRow>
                   <TableCell colSpan={5} className="bg-muted/40 py-4">
                     <div className="space-y-4">
-                      <LoudnessBar
-                        durationSec={call.audio.durationSec}
-                        progress={call.audio.previewProgress}
-                        label="Audio scrub"
-                      />
+                      <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
                       <Transcript segments={call.transcript} />
                     </div>
                   </TableCell>

@@ -44,7 +44,15 @@ Notes:
 
 ## UI (Next.js)
 
-The call analysis UI lives in `web/` and is currently wired to static sample data in `web/src/lib/sample-data.ts`.
+The call analysis UI lives in `web/` and is wired to JSON produced from the whisper pipeline.
+
+Generate the UI data from processed calls:
+
+```bash
+python3 scripts/build_ui_calls.py
+```
+
+The UI streams audio from the processed whisper files via `web/src/app/api/audio/[id]/route.ts`.
 
 Requirements:
 - Node.js 20+
