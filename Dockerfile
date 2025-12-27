@@ -1,6 +1,6 @@
 # CUDA base image to match host driver (avoid NVML mismatch).
-FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04
-
+#GTX 1080 FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04 
+FROM nvidia/cuda:13.1.0-cudnn-runtime-ubuntu24.04
 WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive \
