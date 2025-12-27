@@ -1,0 +1,27 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python Debugger: Run Pipeline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/app/src/main.py",
+            "console": "integratedTerminal",
+            "args": [
+            ]
+        },
+        {
+            "name": "Python Debugger: Download Unifi Transcripts",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/app/src/unifi_transcription_api.py",
+            "console": "integratedTerminal",
+            "args": [
+            ]
+        }
+    ]
+}

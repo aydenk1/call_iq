@@ -1,0 +1,12 @@
+{
+  "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+  "python.analysis.exclude": ["**/data/**"],
+  "files.watcherExclude": {
+    "**/data/**": true
+  },
+  "search.exclude": {
+    "**/data/**": true
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:venv",
+  "python-envs.pythonProjects": []
+}

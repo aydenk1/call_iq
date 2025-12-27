@@ -1,0 +1,14 @@
+.git
+.gitignore
+.vscode
+__pycache__
+*.pyc
+.venv
+env
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Keep images small; mount these at runtime.
+data
