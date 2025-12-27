@@ -10,10 +10,7 @@ ssh: # Required for syncing new calls
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
-  model_name: "large-v3"
-  batch_size: 16
-  num_workers: "auto" # Uses all cpu cores
-  device: "auto" # Uses cuda if available, fallback to cpu
+  device: "ayden-sn1" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
   force: # Forces reprocessing of the whisper pipeline
     preprocess: false
@@ -35,7 +32,13 @@ whisper:
       min_silence_duration_ms: 500 # (split sooner; default 2000 is huge)
       speech_pad_ms: 120 # (default 400 is big)
       min_speech_duration_ms: 200 # (throw away tiny blips)
-
+  device_config: # Fine tuned pipeline configs for best performance on available hardware
+    ayden-sn1:
+      model_name: "large-v3"
+      device: "cuda"
+      compute_type: "int8_float32"
+      batch_size: 1
+      num_workers: "auto"  # Uses all cpu cores
 
     # initial_prompt: >-
     #  This is a phone call for an auto and appliance shop, known as Oswalt-Thomas or Goodyear.
