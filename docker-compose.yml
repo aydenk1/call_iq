@@ -21,6 +21,9 @@ services:
       - ssh_public_key
       - ssh_known_hosts
     gpus: all
+    environment:
+      UNIFI_TOKEN_COOKIE: ${UNIFI_TOKEN_COOKIE}
+      UNIFI_CSRF_TOKEN: ${UNIFI_CSRF_TOKEN}
 
 volumes:
   call_iq_cache:
