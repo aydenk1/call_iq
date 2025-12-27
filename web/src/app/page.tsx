@@ -1,4 +1,6 @@
-import CallCard from "@/components/CallCard";
+import CallTable from "@/components/CallTable";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { callRecords } from "@/lib/sample-data";
 
@@ -7,56 +9,57 @@ export default function HomePage() {
   const latestCall = callRecords[0];
 
   return (
-    <main className="app-shell">
+    <main className="container space-y-10 py-10">
       <header className="flex flex-col gap-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-2xl">
-            <p className="section-title">Call intelligence</p>
+            <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Call intelligence</p>
             <h1 className="text-4xl sm:text-5xl">Conversation cockpit</h1>
-            <p className="mt-4 text-base text-muted">
+            <p className="mt-4 text-base text-muted-foreground">
               Scan every call, spot revenue signals fast, and dive into the audio when something needs action.
             </p>
           </div>
-          <div className="panel grid gap-3 p-5 text-sm">
-            <div className="flex items-center justify-between gap-6">
-              <span className="text-muted">Calls tracked</span>
-              <span className="text-lg font-semibold text-ink">{callRecords.length}</span>
-            </div>
-            <div className="flex items-center justify-between gap-6">
-              <span className="text-muted">Total talk time</span>
-              <span className="text-lg font-semibold text-ink">{formatDuration(totalDuration)}</span>
-            </div>
-            {latestCall && (
-              <div className="flex items-center justify-between gap-6">
-                <span className="text-muted">Latest call</span>
-                <span className="text-sm font-semibold text-ink">{formatDateTime(latestCall.createdAt)}</span>
+          <Card className="w-full max-w-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">At a glance</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Calls tracked</span>
+                <span className="text-base font-semibold text-foreground">{callRecords.length}</span>
               </div>
-            )}
-          </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Total talk time</span>
+                <span className="text-base font-semibold text-foreground">{formatDuration(totalDuration)}</span>
+              </div>
+              {latestCall && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Latest call</span>
+                  <span className="text-sm font-semibold text-foreground">{formatDateTime(latestCall.createdAt)}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </header>
 
-      <section className="mt-10 space-y-6">
+      <section className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="chip chip-accent" type="button">
+          <Button type="button" size="sm">
             All calls
-          </button>
-          <button className="chip" type="button">
+          </Button>
+          <Button type="button" size="sm" variant="secondary">
             Potential sale
-          </button>
-          <button className="chip" type="button">
+          </Button>
+          <Button type="button" size="sm" variant="secondary">
             Lost sale
-          </button>
-          <button className="chip" type="button">
+          </Button>
+          <Button type="button" size="sm" variant="secondary">
             Needs follow-up
-          </button>
+          </Button>
         </div>
 
-        <div className="space-y-4">
-          {callRecords.map((call, index) => (
-            <CallCard key={call.id} call={call} defaultOpen={index === 0} />
-          ))}
-        </div>
+        <CallTable calls={callRecords} />
       </section>
     </main>
   );

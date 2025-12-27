@@ -1,14 +1,13 @@
-import clsx from "clsx";
+import { Badge } from "@/components/ui/badge";
+import type { TagTone } from "@/lib/tag-tone";
 
 type TagProps = {
   label: string;
-  tone?: "accent" | "warn";
+  tone?: TagTone;
 };
 
 export default function Tag({ label, tone }: TagProps) {
-  return (
-    <span className={clsx("chip", tone === "accent" && "chip-accent", tone === "warn" && "chip-warn")}>
-      {label}
-    </span>
-  );
+  const variant = tone === "warn" ? "destructive" : tone === "accent" ? "default" : "secondary";
+
+  return <Badge variant={variant}>{label}</Badge>;
 }
