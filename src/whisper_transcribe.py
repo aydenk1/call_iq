@@ -148,10 +148,8 @@ class WhisperTranscribe:
         self,
         input_root: Path,
         output_root: Path,
-        model_name: str,
-        num_workers: int | str,
         device: str,
-        batch_size: int,
+        device_config: dict[str, Any],
         merge_segments_s: float | None,
         force: dict[str, bool],
         whisper_model_kwargs: dict[str, Any]
@@ -161,12 +159,12 @@ class WhisperTranscribe:
         self.output_root: Path = Path(output_root)
         self.output_root.mkdir(parents=True, exist_ok=True)
 
-        self.model_name: str = model_name
-        self.batch_size: int = batch_size
+        self.model_name: str = device_config[device]["model_name"]
+        self.batch_size: int = device_config[device]["batch_size"]
 
-        self.num_workers: int = self._resolve_cpu_count(num_workers)
-        self.device: str = self._resolve_device(device) 
-        self.compute_type: str = self._default_compute_type(self.device)
+        self.num_workers: int = self._resolve_cpu_count(device_config[device]["num_workers"])
+        self.device: str = self._resolve_device(device_config[device]["device"]) 
+        self.compute_type: str = device_config[device]["compute_type"]
         self.merge_segments_s = merge_segments_s
         
         # Ensure rest of pipeline runs if earlier options are forced
@@ -277,12 +275,15 @@ class WhisperTranscribe:
     def _resolve_device(device) -> str:
         """Return the best available device (CUDA or CPU)."""
         if device != "auto":
+            logging.info(f"Forcing use of device: {device}")
             return device
         try:
             if int(ctranslate2.get_cuda_device_count()) > 0:
+                logging.info("Using device: cuda")
                 return "cuda"
         except Exception:
             pass
+        logging.info("Using device: cpu")
         return "cpu"
     
     @staticmethod
@@ -294,12 +295,6 @@ class WhisperTranscribe:
         if cpu_count is None:
             return 1
         return cpu_count
-
-    def _default_compute_type(self, device: str) -> str:
-        """Pick an efficient compute precision for the given device."""
-        if device == "cuda":
-            return "float16"
-        return "int8"
 
     def _load_model(self) -> WhisperModel:
         """Lazy-load the faster-whisper model instance."""
