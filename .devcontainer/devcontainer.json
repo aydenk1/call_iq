@@ -11,6 +11,8 @@
       "settings": {
         "python.analysis.extraPaths": ["${workspaceFolder}/src"],
         "python.analysis.exclude": ["**/data/**"],
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.terminal.activateEnvironment": true,
         "files.watcherExclude": {
           "**/data/**": true
         },
