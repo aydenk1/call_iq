@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""Build UI call records from whisper conversation JSON files."""
-
-from __future__ import annotations
-
 import argparse
 import json
 from dataclasses import dataclass

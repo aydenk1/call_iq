@@ -15,7 +15,7 @@ from faster_whisper import BatchedInferencePipeline, WhisperModel
 from faster_whisper.transcribe import Segment
 from tqdm import tqdm
 
-from subprocess_pool import SubprocessPool
+from pipeline.utils.subprocess_pool import SubprocessPool
 
 
 @dataclass

@@ -7,8 +7,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
-from .crud import get_call, list_calls
 from .db import Database
+from .models import CallRecord
 
 
 def parse_origins(raw_origins: str | None) -> list[str]:
@@ -53,13 +53,13 @@ def list_call_records(
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ) -> Sequence[dict[str, object]]:
-    calls = list_calls(session=session, limit=limit, offset=offset)
+    calls = CallRecord.list_records(session=session, limit=limit, offset=offset)
     return [call.to_camel_dict() for call in calls]
 
 
 @app.get("/calls/{call_id}")
 def get_call_record(call_id: str, session: Session = Depends(get_session)) -> dict[str, object]:
-    call = get_call(session=session, call_id=call_id)
+    call = CallRecord.get(session=session, call_id=call_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     return call.to_camel_dict()

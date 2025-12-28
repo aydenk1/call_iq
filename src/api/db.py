@@ -18,6 +18,7 @@ class Database:
         self._engine = None
 
     def create_db_and_tables(self) -> None:
+        from api import models
         SQLModel.metadata.create_all(self.engine)
 
     @property
