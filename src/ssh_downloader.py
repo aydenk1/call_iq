@@ -6,6 +6,8 @@ from itertools import islice
 from pathlib import Path
 from shutil import rmtree
 from typing import Sequence
+from multiprocessing import Process
+import time
 
 from tqdm import tqdm
 
@@ -19,18 +21,23 @@ def chunked(seq: Sequence, n: int):
         yield chunk
 
 
-class SSHDownloader:
+class SSHDownloader(Process):
     def __init__(self,
                  remote_host: str,
                  remote_dir: str,
-                 local_dir: str) -> None:
-        
+                 local_dir: str,
+                 check_db: bool = True,
+                 sleep_s: int = 60) -> None:
+        super().__init__()
         self.remote_host = remote_host
         self.remote_dir = Path(remote_dir)
         self.local_dir = Path(local_dir)
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.local_temp_dir = self.local_dir.parent / f"{self.local_dir.name}.tmp"
         rmtree(self.local_temp_dir, ignore_errors=True)
+        self.check_db = check_db
+        self.sleep_s = sleep_s
+        self._db = None
         
         self.ssh_base = [
             "ssh",
@@ -41,6 +48,16 @@ class SSHDownloader:
             self.remote_host,
         ]
         return
+
+    def get_db_queue(self) -> set[str]:
+        from api.crud import list_call_ids
+        from api.db import Database
+        from api.models import PipelineStatus
+
+        if self._db is None:
+            self._db = Database()
+        with self._db.session() as session:
+            return list_call_ids(session, status=PipelineStatus.queued)
     
     def find_transfer_size(self, abs_remote_paths: list[str]):
         """
@@ -67,7 +84,7 @@ class SSHDownloader:
             total += n
         return total
 
-    def prepare_transfer(self) -> tuple[int, list[str], list[str]]:
+    def prepare_transfer(self, download_queue: set[str] | None) -> tuple[int, list[str], list[str]]:
         queue_paths_rel: list[str] = []
         queue_paths_abs: list[str] = []
         cmd = [*self.ssh_base, "find", str(self.remote_dir), "-type", "f", "-print"]
@@ -78,9 +95,12 @@ class SSHDownloader:
         for rp in abs_remote_paths:
             rel = rp.relative_to(self.remote_dir)
             lp = self.local_dir / rel
-            if not lp.exists():
-                queue_paths_rel.append(str(rel))
-                queue_paths_abs.append(str(rp))
+            if lp.exists():
+                continue
+            if download_queue is not None and rel.stem not in download_queue:
+                continue
+            queue_paths_rel.append(str(rel))
+            queue_paths_abs.append(str(rp))
 
         total_size = sum([self.find_transfer_size(chunk) for chunk in chunked(queue_paths_abs, 250)])
         logging.info(f"Found {len(queue_paths_rel)} files to download totaling {(total_size / (1024 ** 2)):.2f} MiB")
@@ -173,11 +193,19 @@ class SSHDownloader:
         logging.info(f"Finalize: moved {moved}, skipped_existing {skipped}")
         return moved, skipped
     
-    def download(self) -> None:
-        total_size, queue_paths_rel, queue_paths_abs = self.prepare_transfer()
-        if not queue_paths_rel:
-            logging.info("No new files to download.")
-            return
-        self.transfer(total_size, queue_paths_rel)
-        self.finalize_transfer()
-        return
+    def run(self) -> None:
+        while True:
+            download_queue: set[str] | None = None
+            if self.check_db:
+                download_queue = self.get_db_queue()
+                if not download_queue:
+                    logging.info("No queued calls found.")
+
+            total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer(download_queue)
+            if not queue_paths_rel:
+                logging.info("No new files to download.")
+            else:
+                self.transfer(total_size, queue_paths_rel)
+                self.finalize_transfer()
+
+            time.sleep(self.sleep_s)

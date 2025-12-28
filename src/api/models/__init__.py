@@ -1,5 +1,5 @@
 """SQLModel ORM models."""
 
-from .call_record import CallRecord
+from .call_record import CallRecord, PipelineStatus
 
-__all__ = ["CallRecord"]
+__all__ = ["CallRecord", "PipelineStatus"]

@@ -8,13 +8,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from .crud import get_call, list_calls
-from .db import create_db_and_tables, get_session
+from .db import Database
 
 
 def parse_origins(raw_origins: str | None) -> list[str]:
     if not raw_origins:
         return ["http://localhost:3000"]
     return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+
+db = Database()
+
+
+def get_session():
+    with db.session() as session:
+        yield session
 
 
 app = FastAPI(title="Call IQ API")
@@ -31,7 +39,7 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     if os.getenv("SQLMODEL_CREATE_TABLES") == "1":
-        create_db_and_tables()
+        db.create_db_and_tables()
 
 
 @app.get("/health")
