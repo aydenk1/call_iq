@@ -6,7 +6,7 @@ import Transcript from "@/components/Transcript";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Card } from "@/components/ui/card";
 import { formatDateTime, formatDuration } from "@/lib/format";
-import type { CallRecord } from "@/lib/sample-data";
+import type { CallRecord } from "@/lib/call-types";
 import { getTagTone } from "@/lib/tag-tone";
 
 type CallCardProps = {

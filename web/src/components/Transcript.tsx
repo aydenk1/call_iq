@@ -1,5 +1,5 @@
 import { formatTimestamp } from "@/lib/format";
-import type { TranscriptSegment } from "@/lib/sample-data";
+import type { TranscriptSegment } from "@/lib/call-types";
 
 type TranscriptProps = {
   segments: TranscriptSegment[];

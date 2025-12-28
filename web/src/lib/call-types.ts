@@ -1,5 +1,3 @@
-import callRecordsRaw from "./call-records.json";
-
 export type TranscriptSegment = {
   speaker: string;
   startSec: number;
@@ -39,5 +37,3 @@ export type CallRecord = {
   suggestedTasks: string[];
   contactProfile?: ContactProfile;
 };
-
-export const callRecords = callRecordsRaw as CallRecord[];

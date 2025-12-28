@@ -1,5 +1,10 @@
+alembic
 debugpy
+fastapi
 faster-whisper>=1.2.1
+psycopg[binary]
 PyYAML
 requests
+sqlmodel
 tqdm>=4.66
+uvicorn[standard]

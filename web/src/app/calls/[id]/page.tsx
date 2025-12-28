@@ -7,17 +7,20 @@ import Transcript from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { fetchCallRecords } from "@/lib/calls";
 import { formatDateTime, formatDuration } from "@/lib/format";
-import { callRecords } from "@/lib/sample-data";
 import { getTagTone } from "@/lib/tag-tone";
 
 type CallDetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+export const dynamic = "force-dynamic";
+
 export default async function CallDetailPage({ params }: CallDetailPageProps) {
   const { id } = await params;
   const callId = decodeURIComponent(id);
+  const callRecords = await fetchCallRecords();
   const call = callRecords.find((entry) => entry.id === callId);
 
   if (!call) {
@@ -192,8 +195,4 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
       </section>
     </main>
   );
-}
-
-export function generateStaticParams() {
-  return callRecords.map((call) => ({ id: call.id }));
 }

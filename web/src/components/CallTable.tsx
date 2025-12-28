@@ -16,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime, formatDuration } from "@/lib/format";
-import type { CallRecord } from "@/lib/sample-data";
+import type { CallRecord } from "@/lib/call-types";
 import { getTagTone } from "@/lib/tag-tone";
 
 type SortDirection = "asc" | "desc";

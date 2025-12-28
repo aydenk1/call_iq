@@ -1,32 +1,53 @@
 services:
   call_iq:
-    image: call_iq:${IMAGE_TAG}
     build: .
     command: sleep infinity
-    tty: true
-    working_dir: /app
-    shm_size: "32g"
+    depends_on:
+        - db
+    image: call_iq:${IMAGE_TAG}
+    environment:
+      UNIFI_TOKEN_COOKIE: ${UNIFI_TOKEN_COOKIE}
+      UNIFI_CSRF_TOKEN: ${UNIFI_CSRF_TOKEN}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-calliq}:${POSTGRES_PASSWORD:-calliq}@db:5432/${POSTGRES_DB:-calliq}
+    gpus: all
     ports:
-      - "3000:3000"
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
-      - label=disable
-    volumes:
-      - .:/app
-      - call_iq_cache:/root/.cache
-      - call_iq_web_node_modules:/app/web/node_modules
+     - "3000:3000"
     secrets:
       - ssh_private_key
       - ssh_public_key
       - ssh_known_hosts
-    gpus: all
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - label=disable
+    shm_size: "32g"
+    tty: true
+    working_dir: /app
+    volumes:
+      - .:/app
+      - call_iq_cache:/root/.cache
+      - call_iq_web_node_modules:/app/web/node_modules
+    
+  db:
+    image: postgres:16
+    restart: unless-stopped
     environment:
-      UNIFI_TOKEN_COOKIE: ${UNIFI_TOKEN_COOKIE}
-      UNIFI_CSRF_TOKEN: ${UNIFI_CSRF_TOKEN}
-
+      POSTGRES_DB: ${POSTGRES_DB:-calliq}
+      POSTGRES_USER: ${POSTGRES_USER:-calliq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-calliq}
+    volumes:
+      - call_iq_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      
 volumes:
   call_iq_cache:
+  call_iq_pgdata:
   call_iq_web_node_modules:
 
 secrets:

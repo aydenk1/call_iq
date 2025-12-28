@@ -1,10 +1,13 @@
 import CallTable from "@/components/CallTable";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { fetchCallRecords } from "@/lib/calls";
 import { formatDateTime, formatDuration } from "@/lib/format";
-import { callRecords } from "@/lib/sample-data";
 
-export default function HomePage() {
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  const callRecords = await fetchCallRecords();
   const totalDuration = callRecords.reduce((total, call) => total + call.durationSec, 0);
   const latestCall = callRecords[0];
 
