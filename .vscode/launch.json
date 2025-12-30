@@ -11,6 +11,9 @@
             "request": "launch",
             "program": "src/pipeline/main.py",
             "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
             "args": [
             ]
         },
@@ -18,8 +21,11 @@
             "name": "Python Debugger: Download Unifi Transcripts",
             "type": "debugpy",
             "request": "launch",
-            "program": "src/pipeline/workers/unifi_transcription_api.py",
+            "program": "src/pipeline/workers/unifi_ingest.py",
             "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
             "args": [
             ]
         }

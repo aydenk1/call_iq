@@ -54,8 +54,14 @@ class SSHDownloader(Process):
         ]
         return
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
         self._stop_event.set()
+        if os.getpid() == self.pid or self.pid is None:
+            return
+        self.join(timeout=timeout)
+        if self.is_alive():
+            self.terminate()
+            self.join(timeout=terminate_timeout)
 
     def get_db_queue(self) -> set[str]:
         from api.db import Database

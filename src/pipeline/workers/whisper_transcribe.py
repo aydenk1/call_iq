@@ -7,8 +7,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from multiprocessing import Event, Process
 from pathlib import Path
-from typing import Any, Iterable, Self
+from typing import Any, Iterable, Self, Sequence
 
 import ctranslate2
 from faster_whisper import BatchedInferencePipeline, WhisperModel
@@ -143,7 +144,7 @@ class ConversationSegment:
 
 
 
-class WhisperTranscribe:
+class WhisperTranscribe(Process):
     def __init__(
         self,
         input_root: Path,
@@ -152,9 +153,12 @@ class WhisperTranscribe:
         device_config: dict[str, Any],
         merge_segments_s: float | None,
         force: dict[str, bool],
-        whisper_model_kwargs: dict[str, Any]
+        whisper_model_kwargs: dict[str, Any],
+        use_db: bool = True,
+        sleep_s: int = 60,
     ) -> None:
         """Configure the transcription pipeline and ensure output directories exist."""
+        super().__init__()
         self.input_root: Path = Path(input_root)
         self.output_root: Path = Path(output_root)
         self.output_root.mkdir(parents=True, exist_ok=True)
@@ -174,8 +178,68 @@ class WhisperTranscribe:
 
         self.whisper_model_kwargs: dict[str, Any] = whisper_model_kwargs
 
+        self.use_db = use_db
+        self.sleep_s = sleep_s
+        self._db = None
+        self._stop_event = Event()
+
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
+    
+    def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
+        self._stop_event.set()
+        if os.getpid() == self.pid or self.pid is None:
+            return
+        self.join(timeout=timeout)
+        if self.is_alive():
+            self.terminate()
+            self.join(timeout=terminate_timeout)
+
+    def get_db_downloaded(self) -> dict[str, Path]:
+        from api.db import Database
+        from api.models import CallRecord, PipelineStatus
+        from sqlmodel import select
+
+        if self._db is None:
+            self._db = Database()
+
+        with self._db.session() as session:
+            statement = select(CallRecord).where(CallRecord.status == PipelineStatus.DOWNLOADED)
+            records = list(session.exec(statement))
+
+        downloaded: dict[str, Path] = {}
+        for call in records:
+            if not call.audio_file_path:
+                logging.warning(f"Downloaded call {call.id} missing audio_file_path")
+                continue
+            audio_path = Path(call.audio_file_path)
+            if not audio_path.exists():
+                logging.warning(f"Downloaded call {call.id} missing audio file {audio_path}")
+                continue
+            downloaded[call.id] = audio_path
+        return downloaded
+
+    def mark_transcribed(self, artifacts: dict[str, dict[str, Any]] | None = None) -> None:
+        from api.db import Database
+        from api.models import CallRecord, PipelineStatus
+
+        if artifacts is None or not len(artifacts):
+            return
+        if self._db is None:
+            self._db = Database()
+
+        with self._db.session() as session:
+            for call_id in artifacts:
+                call = session.get(CallRecord, call_id)
+                if call is None:
+                    continue
+                if artifacts and call_id in artifacts:
+                    data = artifacts[call_id]
+                    call.transcript = data.get("raw_transcripts", [])
+                    call.conversation = data.get("conversation")
+                    call.transcript_text = data.get("transcript_text")
+                call.status = PipelineStatus.TRANSCRIBED
+            session.commit()
 
     def iter_inputs(self, exts: Iterable[str] = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")) -> list[Path]:
         """Yield every input audio file that matches the provided extensions."""
@@ -230,20 +294,23 @@ class WhisperTranscribe:
             str(out_right),
         ]
 
-    def build_commands(self, force_preprocess: bool) -> tuple[list[list[str]], list[Path]]:
+    def build_commands(self, force_preprocess: bool, src_files: Sequence[Path] | None = None) -> tuple[list[list[str]], list[Path]]:
         """Assemble split commands for any recordings that still need processing."""
         cmds: list[list[str]] = []
-        src_files = self.iter_inputs()
+        if src_files is None:
+            src_files = self.iter_inputs()
+        else:
+            src_files = sorted(src_files)
         for src in src_files:
             out_left, out_right = self.out_paths(src)
             if not force_preprocess and out_left.exists() and out_right.exists():
                 continue
             cmds.append(self.ffmpeg_split_cmd(src, out_left, out_right))
-        return cmds, src_files
+        return cmds, list(src_files)
     
-    def preprocess_audio(self, force_preprocess: bool) -> None:
+    def preprocess_audio(self, force_preprocess: bool, src_files: Sequence[Path] | None = None) -> None:
         """Split every stereo recording into normalized mono speaker channels."""
-        commands, src_files = self.build_commands(force_preprocess)
+        commands, src_files = self.build_commands(force_preprocess, src_files)
         if not commands:
             logging.info("No new recordings require channel splitting.")
             return
@@ -266,10 +333,10 @@ class WhisperTranscribe:
                 }))
 
         failed = [r for r in results if r.rc != 0]
-        logging.info("Split complete. total=%d failed=%d", len(results), len(failed))
+        logging.info(f"Split complete. total={len(results)} failed={len(failed)}")
         if failed:
-            logging.error("Example failure cmd: %s", " ".join(failed[0].cmd))
-            logging.error("stderr: %s", failed[0].stderr.strip())
+            logging.error(f"Example failure cmd: {' '.join(failed[0].cmd)}")
+            logging.error(f"stderr: {failed[0].stderr.strip()}")
         
     @staticmethod
     def _resolve_device(device) -> str:
@@ -339,10 +406,19 @@ class WhisperTranscribe:
         segments = list(segments_iter)
         self._write_transcript(audio_path, info, segments)
 
-    def transcribe(self, force_transcribe: bool) -> None:
+    def transcribe(self, force_transcribe: bool, src_files: Sequence[Path] | None = None) -> None:
         """Transcribe each split file in parallel, tracking failures and progress."""
         targets: list[Path] = []
-        for audio_path in self.iter_split_outputs():
+        if src_files is None:
+            candidate_files = self.iter_split_outputs()
+        else:
+            candidate_files = []
+            for src in src_files:
+                out_left, out_right = self.out_paths(src)
+                candidate_files.extend([out_left, out_right])
+            candidate_files = sorted({p for p in candidate_files if p.exists()})
+
+        for audio_path in candidate_files:
             transcript_path = audio_path.with_suffix(".json")
             if transcript_path.exists() and not force_transcribe:
                 continue
@@ -370,15 +446,15 @@ class WhisperTranscribe:
                     try:
                         future.result()
                     except Exception as exc:  # pragma: no cover - whisper errors depend on runtime env
-                        logging.exception("Failed to transcribe %s", audio_path)
+                        logging.exception(f"Failed to transcribe {audio_path}")
                         failed.append((audio_path, exc))
                     finally:
                         pbar.update(1)
 
-        logging.info("Transcription complete. total=%d failed=%d", len(targets), len(failed))
+        logging.info(f"Transcription complete. total={len(targets)} failed={len(failed)}")
         if failed:
             example_audio, example_exc = failed[0]
-            logging.error("Example transcription failure %s: %s", example_audio, example_exc)
+            logging.error(f"Example transcription failure {example_audio}: {example_exc}")
 
     def _write_transcript(self, audio_path: Path, info: Any, segments: list[Segment]) -> None:
         """Write the transcription metadata and segments to disk as JSON."""
@@ -397,7 +473,11 @@ class WhisperTranscribe:
         }
         transcript_path.write_text(json.dumps(payload, indent=2))
 
-    def postprocess_transcripts(self, force_postprocess: bool) -> list[Transcript]:
+    def postprocess_transcripts(
+        self,
+        force_postprocess: bool,
+        src_files: Sequence[Path] | None = None,
+    ) -> list[Transcript]:
         """
         Stitch `customer.json` + `store.json` into a single, time-ordered conversation.
 
@@ -409,7 +489,13 @@ class WhisperTranscribe:
         if not self.output_root.exists():
             return transcripts
 
-        for call_dir in sorted([p for p in self.output_root.iterdir() if p.is_dir()]):
+        if src_files is None:
+            call_dirs = [p for p in self.output_root.iterdir() if p.is_dir()]
+        else:
+            call_dirs = [self.whisper_out_path(src) for src in src_files]
+            call_dirs = [p for p in call_dirs if p.exists()]
+
+        for call_dir in sorted(set(call_dirs)):
             customer_path = call_dir / "customer.json"
             store_path = call_dir / "store.json"
             timestamp = call_dir / "timestamp.json"
@@ -437,9 +523,88 @@ class WhisperTranscribe:
 
         logging.info(f"Post-processed {len(transcripts)} transcripts")
         return transcripts
+
+    def load_transcript_artifacts(
+        self,
+        src_files: Sequence[Path],
+    ) -> dict[str, dict[str, Any]]:
+        artifacts: dict[str, dict[str, Any]] = {}
+        for src in src_files:
+            call_dir = self.whisper_out_path(src)
+            customer_path = call_dir / "customer.json"
+            store_path = call_dir / "store.json"
+            conversation_path = call_dir / "conversation.json"
+            transcript_text_path = call_dir / "conversation.txt"
+            if not customer_path.exists() or not store_path.exists():
+                continue
+            try:
+                customer = json.loads(customer_path.read_text())
+                store = json.loads(store_path.read_text())
+                raw_transcripts = [customer, store]
+                conversation = None
+                if conversation_path.exists():
+                    conversation = json.loads(conversation_path.read_text())
+                transcript_text = None
+                if transcript_text_path.exists():
+                    transcript_text = transcript_text_path.read_text().strip()
+                elif conversation is not None:
+                    transcript_text = conversation.get("text")
+            except Exception:
+                logging.exception(f"Failed to load transcripts under {call_dir}")
+                continue
+            artifacts[src.stem] = {
+                "raw_transcripts": raw_transcripts,
+                "conversation": conversation,
+                "transcript_text": transcript_text,
+            }
+        return artifacts
     
+    def _completed_ids(self, src_files: Sequence[Path]) -> set[str]:
+        completed: set[str] = set()
+        for src in src_files:
+            out_dir = self.whisper_out_path(src)
+            customer_path = out_dir / "customer.json"
+            store_path = out_dir / "store.json"
+            conversation_path = out_dir / "conversation.json"
+            if customer_path.exists() and store_path.exists() and conversation_path.exists():
+                completed.add(src.stem)
+        return completed
+
+    def run_transcription_pipeline(self, src_files: Sequence[Path] | None = None) -> set[str]:
+        """Execute one pass of the full pipeline: split audio then transcribe outputs."""
+        if src_files is None:
+            src_files = self.iter_inputs()
+        else:
+            src_files = sorted(src_files)
+        if not src_files:
+            return set()
+        self.preprocess_audio(self.force_preprocess, src_files)
+        self.transcribe(self.force_transcribe, src_files)
+        self.postprocess_transcripts(self.force_postprocess, src_files)
+        return self._completed_ids(src_files)
+
     def run(self) -> None:
-        """Execute the full pipeline: split audio then transcribe outputs."""
-        self.preprocess_audio(self.force_preprocess)
-        self.transcribe(self.force_transcribe)
-        self.postprocess_transcripts(self.force_postprocess)
+        """Execute the pipeline using DB state as the trigger."""
+        if not self.use_db:
+            self.run_transcription_pipeline()
+            return
+
+        while not self._stop_event.is_set():
+            downloaded = self.get_db_downloaded()
+            if not downloaded:
+                logging.info("No downloaded calls found.")
+                self._stop_event.wait(self.sleep_s)
+                continue
+
+            src_files = list(downloaded.values())
+            completed_ids = self.run_transcription_pipeline(src_files)
+            if completed_ids:
+                completed_files = [
+                    downloaded[call_id]
+                    for call_id in completed_ids
+                    if call_id in downloaded
+                ]
+                artifacts = self.load_transcript_artifacts(completed_files)
+                if artifacts:
+                    self.mark_transcribed(artifacts)
+            self._stop_event.wait(self.sleep_s)

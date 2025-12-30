@@ -63,6 +63,7 @@ def main(argv: Sequence[str]) -> int:
     db = Database()
     db.create_db_and_tables()
     downloader = None
+    transcriber = None
     if not config["ssh"]["skip"]:
         downloader = SSHDownloader(
             remote_host=config["ssh"]["remote_host"],
@@ -71,25 +72,24 @@ def main(argv: Sequence[str]) -> int:
             use_db=True
         )
         downloader.start()
+    transcriber = WhisperTranscribe(
+        input_root=recording_dir,
+        output_root=whisper_dir,
+        use_db=True,
+        **config["whisper"],
+    )
+    transcriber.start()
 
     try:
-        # transcriber = WhisperTranscribe(
-        #     input_root=recording_dir,
-        #     output_root=whisper_dir,
-        #     **config["whisper"],
-        # )
         while True:
             if stop_requested:
                 break
-            # transcriber.run()
             time.sleep(1)
     finally:
         if downloader is not None:
             downloader.stop()
-            downloader.join(timeout=60)
-            if downloader.is_alive():
-                downloader.terminate()
-                downloader.join(timeout=10)
+        if transcriber is not None:
+            transcriber.stop()
     return 0
 
 

@@ -8,6 +8,7 @@ from sqlalchemy import Column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import Enum as SAEnum
 from sqlmodel import Field, Session, SQLModel, select
+from sqlalchemy import DateTime
 
 
 class PipelineStatus(Enum):
@@ -23,7 +24,7 @@ class CallRecord(SQLModel, table=True):
     __tablename__ = "call_records"
 
     id: str = Field(primary_key=True, index=True)
-    created_at: datetime = Field(index=True)
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), index=True))
     duration_sec: int
     summary: str
     implied_name: str | None = None
@@ -32,9 +33,12 @@ class CallRecord(SQLModel, table=True):
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
     outcome: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
     transcript: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
+    conversation: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
+    transcript_text: str | None = None
     audio: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     suggested_tasks: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
     contact_profile: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
+    raw_call_log: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     status: PipelineStatus = Field(
         default=PipelineStatus.QUEUED,
         sa_column=Column(SAEnum(PipelineStatus, name="pipeline_status"), index=True),
@@ -78,8 +82,11 @@ class CallRecord(SQLModel, table=True):
             "tags": self.tags,
             "outcome": self.outcome,
             "transcript": self.transcript,
+            "conversation": self.conversation,
+            "transcriptText": self.transcript_text,
             "audio": self.audio,
             "suggestedTasks": self.suggested_tasks,
             "contactProfile": self.contact_profile,
+            "rawCallLog": self.raw_call_log,
             "status": self.status,
         }
