@@ -2,15 +2,15 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
-from sqlmodel import select
 from requests.packages.urllib3.exceptions import \
     InsecureRequestWarning  # pyright: ignore[reportMissingImports]
+from sqlmodel import select
 
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
@@ -49,6 +49,7 @@ class UniFiOSClient:
         })
 
         self.csrf_token: str = ""
+        self.login()
 
     def _url(self, path: str) -> str:
         return self.base_url.rstrip("/") + "/" + path.lstrip("/")
@@ -135,21 +136,25 @@ class UniFiOSClient:
 
 
 
-class UnifiCallAPI(Process):
+class UniFiCallIngestion(Process):
     def __init__(
             self,
             unifi_client: UniFiOSClient,
             page_size: int,
-            output_dir: Path
+            output_dir: Path | None = None,
+            call_url: str = "/proxy/talk/api/call_log",
+            sleep_between_request_s: int = 60,
+            sleep_same_request_s: float = .2,
         ):
         super().__init__()
         self.unifi_client: UniFiOSClient = unifi_client
         self.page_size: int = page_size
-        self.output_dir: Path = output_dir
+        self.output_dir: Path | None = output_dir
 
-        self.call_url = "/proxy/talk/api/call_log"
-        self.sleep_same_request_s = .1
-        self.sleep_between_request_s = 60
+        self.call_url = call_url
+        self.sleep_between_request_s = sleep_between_request_s
+        self.sleep_same_request_s = sleep_same_request_s
+
         self._stop_event = Event()
         self._db = None
 
@@ -198,18 +203,6 @@ class UnifiCallAPI(Process):
         if self.is_alive():
             self.terminate()
             self.join(timeout=terminate_timeout)
-
-    def run_file(self) -> dict:
-        """ Old run method for storing pulled info in json on disk """
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        data = self.get_data(None)
-
-        for uuid in data:
-            output_path = self.output_dir / f'{uuid}.json'
-            output_path.write_text(json.dumps(data[uuid], indent=2), encoding="utf-8")
-
-        print(f"Wrote {len(data)} transcripts to {self.output_dir}")
-        return data
     
     def update_db(self, data: dict[str, Any]) -> None:
         if self._db is None:
@@ -245,7 +238,7 @@ class UnifiCallAPI(Process):
             if call_records:
                 session.add_all(call_records)
             session.commit()
-        logging.info(f"{self.name} Updated the DB with {len(call_records)} calls.")
+        logging.info(f"Updated the DB with {len(call_records)} calls.")
         
     @property
     def most_recent_call(self) -> datetime | None:
@@ -254,6 +247,20 @@ class UnifiCallAPI(Process):
         with self._db.session() as session:
             statement = select(CallRecord.created_at).order_by(CallRecord.created_at.desc()).limit(1)
             return session.exec(statement).first()
+        
+    def run_file(self) -> dict:
+        """ Old run method for storing pulled info in json on disk """
+        if self.output_dir is None:
+            raise Exception("No output dir provided, which is required for file mode.")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        data = self.get_data(None)
+
+        for uuid in data:
+            output_path = self.output_dir / f'{uuid}.json'
+            output_path.write_text(json.dumps(data[uuid], indent=2), encoding="utf-8")
+
+        print(f"Wrote {len(data)} transcripts to {self.output_dir}")
+        return data
 
     def run_db(self) -> None:
         while not self._stop_event.is_set():
@@ -262,9 +269,9 @@ class UnifiCallAPI(Process):
 
             if len(data):
                 most_recent_call_id = next(iter(data))
-                old_call_time = "None" if most_recent_call is None else most_recent_call.strftime("%b %d, %Y %I:%M %p")
+                old_call_time = "None" if most_recent_call is None else most_recent_call.astimezone().strftime("%b %d, %Y %I:%M %p")
                 most_recent_call = self._parse_call_time(data[most_recent_call_id]["time"])
-                logging.info(f"{self.name} Most recent call updated from {old_call_time} -> {most_recent_call.strftime('%b %d, %Y %I:%M %p')}")
+                logging.info(f"{self.name} Most recent call updated from {old_call_time} -> {most_recent_call.astimezone().strftime('%b %d, %Y %I:%M %p')}")
 
             self.update_db(data)
             self._stop_event.wait(self.sleep_between_request_s)
@@ -281,7 +288,11 @@ class UnifiCallAPI(Process):
 
 if __name__ == "__main__":
     # Provide secrets via env vars instead of hardcoding.
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] [%(processName)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     UNIFI_USERNAME = os.getenv("UNIFI_USERNAME")
     UNIFI_PASSWORD = os.getenv("UNIFI_PASSWORD")
     if not UNIFI_USERNAME or not UNIFI_PASSWORD:
@@ -294,13 +305,13 @@ if __name__ == "__main__":
         username=UNIFI_USERNAME,
         password=UNIFI_PASSWORD,
         )
-    client.login()
 
-    api = UnifiCallAPI(
+    api = UniFiCallIngestion(
         unifi_client=client,
         output_dir=Path(__file__).resolve().parent.parent / "data" / "unifi_call_logs",
         page_size=25,
     )
+
     Database().create_db_and_tables()
     api.run()
 

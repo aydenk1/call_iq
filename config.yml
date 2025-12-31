@@ -4,13 +4,22 @@ global:
   whisper_dir: "whisper" # work_dir / whisper_dir
   verbose: true # logging level
 
+unifi_ingestion: # Ingests call log data from UniFi call logs
+  activate: true
+  base_url: "https://192.168.1.1"
+  call_url: "/proxy/talk/api/call_log"
+  page_size: "25"
+  sleep_between_request_s: 60
+  sleep_same_request_s: .2
+  
 ssh: # Required for syncing new calls
-  skip: false # Use true to skip downloading of new calls
+  activate: false # Use true to skip downloading of new calls
   remote_host: "unifi-router"
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
-  device: "ayden-sn1" # Select which device_config to use
+  activate: false # Performs transcription of new calls
+  device: "ayden-workstation" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
   force: # Forces reprocessing of the whisper pipeline
     preprocess: false
@@ -38,6 +47,13 @@ whisper:
       device: "cuda"
       compute_type: "int8_float32"
       batch_size: 1
+      num_workers: "auto"  # Uses all cpu cores
+
+    ayden-workstation:
+      model_name: "large-v3"
+      device: "cuda"
+      compute_type: "float16"
+      batch_size: 16
       num_workers: "auto"  # Uses all cpu cores
 
     # initial_prompt: >-

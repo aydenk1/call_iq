@@ -8,16 +8,19 @@ conversation log.
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
 
+
 import yaml
 
 from api.db import Database
 from pipeline.workers.ssh_downloader import SSHDownloader
+from pipeline.workers.unifi_ingest import UniFiCallIngestion, UniFiOSClient
 from pipeline.workers.whisper_transcribe import WhisperTranscribe
 
 
@@ -25,10 +28,10 @@ def configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        format="%(asctime)s [%(levelname)s] [%(processName)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
+    logging.getLogger("urllib3").setLevel(level)
 
 def load_config(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
@@ -62,9 +65,27 @@ def main(argv: Sequence[str]) -> int:
 
     db = Database()
     db.create_db_and_tables()
+    unifi_ingestion = None
     downloader = None
     transcriber = None
-    if not config["ssh"]["skip"]:
+
+    if config["unifi_ingestion"].pop("activate"):
+        unifi_client = UniFiOSClient(
+            base_url=config["unifi_ingestion"]["base_url"],
+            username=os.getenv("UNIFI_USERNAME", ""),
+            password=os.getenv("UNIFI_PASSWORD", "")
+            )
+        unifi_ingestion = UniFiCallIngestion(
+            unifi_client=unifi_client,
+            call_url=config["unifi_ingestion"]["call_url"],
+            page_size=config["unifi_ingestion"]["page_size"],
+            sleep_between_request_s=config["unifi_ingestion"]["sleep_between_request_s"],
+            sleep_same_request_s=config["unifi_ingestion"]["sleep_same_request_s"],
+
+        )
+        unifi_ingestion.start()
+
+    if config["ssh"].pop("activate"):
         downloader = SSHDownloader(
             remote_host=config["ssh"]["remote_host"],
             remote_dir=config["ssh"]["remote_path"],
@@ -72,13 +93,15 @@ def main(argv: Sequence[str]) -> int:
             use_db=True
         )
         downloader.start()
-    transcriber = WhisperTranscribe(
-        input_root=recording_dir,
-        output_root=whisper_dir,
-        use_db=True,
-        **config["whisper"],
-    )
-    transcriber.start()
+    
+    if config["whisper"].pop("activate"):
+        transcriber = WhisperTranscribe(
+            input_root=recording_dir,
+            output_root=whisper_dir,
+            use_db=True,
+            **config["whisper"],
+        )
+        transcriber.start()
 
     try:
         while True:
@@ -86,6 +109,8 @@ def main(argv: Sequence[str]) -> int:
                 break
             time.sleep(1)
     finally:
+        if unifi_ingestion is not None:
+            unifi_ingestion.stop()
         if downloader is not None:
             downloader.stop()
         if transcriber is not None:
