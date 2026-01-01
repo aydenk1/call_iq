@@ -89,8 +89,7 @@ def main(argv: Sequence[str]) -> int:
         downloader = SSHDownloader(
             remote_host=config["ssh"]["remote_host"],
             remote_dir=config["ssh"]["remote_path"],
-            local_dir=recording_dir,
-            use_db=True
+            local_dir=recording_dir
         )
         downloader.start()
     

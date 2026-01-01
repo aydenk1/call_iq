@@ -13,13 +13,13 @@ unifi_ingestion: # Ingests call log data from UniFi call logs
   sleep_same_request_s: .2
   
 ssh: # Required for syncing new calls
-  activate: false # Use true to skip downloading of new calls
+  activate: true # Use true to skip downloading of new calls
   remote_host: "unifi-router"
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
   activate: false # Performs transcription of new calls
-  device: "ayden-workstation" # Select which device_config to use
+  device: "ayden-sn1" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
   force: # Forces reprocessing of the whisper pipeline
     preprocess: false

@@ -30,6 +30,7 @@ class CallRecord(SQLModel, table=True):
     implied_name: str | None = None
     external_number: str | None = None
     audio_file_path: str | None = None
+    recording: bool
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
     outcome: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
     transcript: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
@@ -79,6 +80,7 @@ class CallRecord(SQLModel, table=True):
             "impliedName": self.implied_name,
             "externalNumber": self.external_number,
             "audioFilePath": self.audio_file_path,
+            "recording": self.recording,
             "tags": self.tags,
             "outcome": self.outcome,
             "transcript": self.transcript,

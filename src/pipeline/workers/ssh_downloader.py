@@ -3,14 +3,17 @@ import logging
 import os
 import subprocess
 from contextlib import ExitStack
-from datetime import datetime, timezone
 from itertools import islice
 from multiprocessing import Event, Process
 from pathlib import Path
 from shutil import rmtree
 from typing import Sequence
 
+from sqlmodel import select
 from tqdm import tqdm
+
+from api.db import Database
+from api.models import CallRecord, PipelineStatus
 
 AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
 
@@ -29,7 +32,6 @@ class SSHDownloader(Process):
                  remote_host: str,
                  remote_dir: str,
                  local_dir: str,
-                 use_db: bool = True,
                  sleep_s: int = 60) -> None:
         super().__init__()
         self.remote_host = remote_host
@@ -38,11 +40,9 @@ class SSHDownloader(Process):
         self.local_dir.mkdir(parents=True, exist_ok=True)
         self.local_temp_dir = self.local_dir.parent / f"{self.local_dir.name}.tmp"
         rmtree(self.local_temp_dir, ignore_errors=True)
-        self.use_db = use_db
         self.sleep_s = sleep_s
-        self._db = None
         self._stop_event = Event()
-        self._last_local_hash: str | None = None
+        self._db: Database | None = None
         
         self.ssh_base = [
             "ssh",
@@ -53,6 +53,12 @@ class SSHDownloader(Process):
             self.remote_host,
         ]
         return
+    
+    @property
+    def db(self) -> Database:
+        if self._db is None:
+            self._db = Database()
+        return self._db
 
     def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
         self._stop_event.set()
@@ -64,12 +70,7 @@ class SSHDownloader(Process):
             self.join(timeout=terminate_timeout)
 
     def get_db_queue(self) -> set[str]:
-        from api.db import Database
-        from api.models import CallRecord, PipelineStatus
-
-        if self._db is None:
-            self._db = Database()
-        with self._db.session() as session:
+        with self.db.session() as session:
             return CallRecord.list_ids(session, status=PipelineStatus.QUEUED)
 
     def get_local_recordings(self) -> list[Path]:
@@ -95,80 +96,45 @@ class SSHDownloader(Process):
         return hasher.hexdigest()
     
     def update_db(self, succeeded_transfers: list[Path], failed_transfers: list[Path]):
-        """ Initializes a CallRecord into the database for further processing in the pipeline.
-            Any calls on disk not in the DB will also be initialized. 
-            Only operates on audio files.
+        """ Updates all call records that have been successfully downloaded with
+            the saved audio path and sets status to DOWNLOADED.
 
-            Handles the following scenarios
-            1. New files
-            2. Forced queues
-            3. Local files not in db
+            Raise an exception if the call_id is not found. 
         """
-        from api.db import Database
-        from api.models import CallRecord, PipelineStatus
+        with self.db.session() as session:
+            call_records: int = 0
+            ids = {p.stem for p in succeeded_transfers + failed_transfers if p.suffix in AUDIO_EXTS}
+            if not ids:
+                logging.info("No call records to update")
+                return
 
-        if self._db is None:
-            self._db = Database()
+            record_map: dict[str, CallRecord] = {}
+            for chunk in chunked(list(ids), 1000):
+                records = session.exec(
+                    select(CallRecord).where(CallRecord.id.in_(chunk))
+                ).all()
+                record_map.update({r.id: r for r in records})
+            missing = ids - record_map.keys()
+            
+            if len(missing):
+                raise Exception(f"{self.name} The following call_ids are not found in the database.\n{missing}")
 
-        with self._db.session() as session:
-            processed_ids: set[str] = set()
-            call_records: list[CallRecord] = []
-
-            # Update DB with succeeded_transfers (new remote files OR requested update via CallRecord.status = QUEUED)
+            # Update DB with succeeded_transfers, None should not be an issue due to the id check
             for local_path in succeeded_transfers:
-                call_id = local_path.stem
-                processed_ids.add(call_id)
-                call = session.get(CallRecord, call_id)
-                created_at = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc)
-                if call is None:
-                    call = CallRecord(
-                        id=call_id,
-                        created_at=created_at,
-                        duration_sec=0,
-                        summary="",
-                        audio_file_path=str(local_path),
-                        status=PipelineStatus.DOWNLOADED,
-                    )
-                    call_records.append(call)
-                else:
-                    call.created_at = created_at
+                if local_path.suffix in AUDIO_EXTS:
+                    call = record_map[local_path.stem]
                     call.audio_file_path = str(local_path)
                     call.status = PipelineStatus.DOWNLOADED
+                    call_records += 1
 
-            # Update DB failed transfers
+            # Update DB failed_transfers
             for local_path in failed_transfers:
-                call_id = local_path.stem
-                processed_ids.add(call_id)
-                call = session.get(CallRecord, call_id)
-                if call is None:
-                    call = CallRecord(
-                        id=call_id,
-                        created_at=created_at,
-                        duration_sec=0,
-                        summary="",
-                        audio_file_path=str(local_path),
-                        status=PipelineStatus.FAILED,
-                    )
-                    call_records.append(call)
-                call.status = PipelineStatus.FAILED
-
-            # Add anything remaining that is not in the database but on disk. Skip any id in the failed list.
-            local_files = self.get_local_recordings()
-            local_by_id = {path.stem: path for path in local_files}
-            remaining_ids = set(local_by_id.keys()) ^ CallRecord.list_ids(session)
-            remaining_ids = remaining_ids.difference(processed_ids)
-            for call_id in remaining_ids:
-                created_at = datetime.fromtimestamp(local_by_id[call_id].stat().st_mtime, tz=timezone.utc)
-                call = CallRecord(
-                    id=call_id,
-                    created_at=created_at,
-                    duration_sec=0,
-                    summary="",
-                    audio_file_path=str(local_by_id[call_id]),
-                    status=PipelineStatus.DOWNLOADED,
-                )
-                call_records.append(call)
-            logging.info(f"Updated database with {len(call_records)} new records")
+                if local_path.suffix in AUDIO_EXTS:
+                    call = record_map[local_path.stem]
+                    call.status = PipelineStatus.FAILED
+                    call_records += 1
+            
+            logging.info(f"Updated {call_records} call records")
             session.commit()
     
     def find_transfer_size(self, abs_remote_paths: list[str]):
@@ -196,7 +162,7 @@ class SSHDownloader(Process):
             total += n
         return total
 
-    def prepare_transfer(self, download_queue: set[str] | None) -> tuple[int, list[str], list[str]]:
+    def prepare_transfer(self, download_queue: set[str] | None = None) -> tuple[int, list[str], list[str]]:
         queue_paths_rel: list[str] = []
         queue_paths_abs: list[str] = []
         cmd = [*self.ssh_base, "find", str(self.remote_dir), "-type", "f", "-print"]
@@ -301,35 +267,35 @@ class SSHDownloader(Process):
         logging.info(f"Finalize: moved {len(moved)}, skipped {len(skipped)}")
         return moved, skipped
     
-    def run(self) -> None:
+    def run_file(self) -> None:
+        """ Old run method for local testing."""
         while not self._stop_event.is_set():
-            download_queue: set[str] | None = None
-            # Check for any files that need to be redownloaded, occurs when CallRecord.status == "QUEUED"
-            if self.use_db:
-                download_queue = self.get_db_queue()
-                if not download_queue:
-                    logging.info("No queued calls found.")
-
-            total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer(download_queue)
-            moved: list[Path] = []
-            skipped: list[Path] = []
+            total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer()
             if not queue_paths_rel:
                 logging.info("No new files to download.")
             else:
                 self.transfer(total_size, queue_paths_rel)
-                moved, skipped = self.finalize_transfer(queue_paths_rel)
+                self.finalize_transfer(queue_paths_rel)
+            self._stop_event.wait(self.sleep_s)
 
-            if self.use_db:
-                new_hash = self.local_recordings_hash()
-                should_update = (
-                    self._last_local_hash is None
-                    or new_hash != self._last_local_hash
-                    or moved
-                    or skipped
-                )
-                if should_update:
-                    self.update_db(moved, skipped)
-                    self._last_local_hash = new_hash
-                
+
+    def run(self) -> None:
+        """ Start file sync based off of DB records """
+        while not self._stop_event.is_set():
+            # Check for any files that need to be redownloaded, occurs when CallRecord.status == "QUEUED"
+            download_queue = self.get_db_queue()
+            logging.info(f"Found {len(download_queue)} calls to download.")
+            if download_queue:
+                total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer(download_queue)
+                moved: list[Path] = []
+                skipped: list[Path] = []
+                if not queue_paths_rel:
+                    logging.info("No new files to download.")
+                else:
+                    self.transfer(total_size, queue_paths_rel)
+                    moved, skipped = self.finalize_transfer(queue_paths_rel)
+                self.update_db(moved, skipped)
+            else:
+                logging.info("No queued calls found.")
             self._stop_event.wait(self.sleep_s)
             

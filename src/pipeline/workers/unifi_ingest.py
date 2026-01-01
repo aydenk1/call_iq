@@ -215,15 +215,15 @@ class UniFiCallIngestion(Process):
                 call = session.get(CallRecord, call_uuid)
                 created_at = self._parse_call_time(data[call_uuid].pop("time"))
                 duration_sec = data[call_uuid].pop("duration")
+                recording = data[call_uuid].pop("recording")
+                status = PipelineStatus.QUEUED if recording else PipelineStatus.FAILED
                 if duration_sec is None:
                     logging.warning(
-                        "Call %s missing duration; marking FAILED with duration_sec=0",
-                        call_uuid,
+                        f"Call {call_uuid} missing duration; marking FAILED with duration_sec=0",
                     )
                     duration_sec = 0
+                    recording = False
                     status = PipelineStatus.FAILED
-                else:
-                    status = PipelineStatus.QUEUED
                 if call is None:
                     call = CallRecord(
                         id=call_uuid,
@@ -231,6 +231,7 @@ class UniFiCallIngestion(Process):
                         duration_sec=duration_sec,
                         summary="",
                         status=status,
+                        recording=recording,
                         raw_call_log=data[call_uuid]
                     )
                     call_records.append(call)
@@ -262,7 +263,8 @@ class UniFiCallIngestion(Process):
         print(f"Wrote {len(data)} transcripts to {self.output_dir}")
         return data
 
-    def run_db(self) -> None:
+    def run(self) -> None:
+        """ Start ingestion process and upload to the DB"""
         while not self._stop_event.is_set():
             most_recent_call = self.most_recent_call
             data = self.get_data(most_recent_call)
@@ -275,9 +277,6 @@ class UniFiCallIngestion(Process):
 
             self.update_db(data)
             self._stop_event.wait(self.sleep_between_request_s)
-
-    def run(self) -> None:
-        self.run_db()
 
     @staticmethod
     def _parse_call_time(value: Any) -> datetime:
