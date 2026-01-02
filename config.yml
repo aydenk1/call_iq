@@ -18,10 +18,11 @@ ssh: # Required for syncing new calls
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
-  activate: false # Performs transcription of new calls
+  activate: activate # Performs transcription of new calls
   device: "ayden-sn1" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
-  force: # Forces reprocessing of the whisper pipeline
+  db_commit_batch_size: 32 # Process this many files before commiting to db.
+  force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
     transcribe: false
     postprocess: false

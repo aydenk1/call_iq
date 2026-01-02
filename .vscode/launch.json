@@ -28,6 +28,25 @@
             },
             "args": [
             ]
+        },
+        {
+            "name": "Python Debugger: FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src",
+                "DATABASE_URL": "${env:DATABASE_URL}",
+                "SQLMODEL_CREATE_TABLES": "1"
+            },
+            "args": [
+                "api.main:app",
+                "--app-dir", "src",
+                "--host", "0.0.0.0",
+                "--port", "8000",
+                "--reload"
+            ]
         }
     ]
 }

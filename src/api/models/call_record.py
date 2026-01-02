@@ -33,8 +33,7 @@ class CallRecord(SQLModel, table=True):
     recording: bool
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
     outcome: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
-    transcript: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
-    conversation: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
+    raw_whisper_transcript: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
     transcript_text: str | None = None
     audio: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     suggested_tasks: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
@@ -54,6 +53,15 @@ class CallRecord(SQLModel, table=True):
             .limit(limit)
         )
         return list(session.exec(statement))
+    
+    @classmethod
+    def get_from_id(cls, session: Session, call_ids: list) -> dict[str, CallRecord]:
+        statement = (
+            select(cls)
+            .where(CallRecord.id.in_(call_ids))
+            .order_by(cls.created_at.desc())
+        )
+        return {call.id: call for call in session.exec(statement).all()}
 
     @classmethod
     def get(cls, session: Session, call_id: str) -> CallRecord | None:
@@ -83,8 +91,7 @@ class CallRecord(SQLModel, table=True):
             "recording": self.recording,
             "tags": self.tags,
             "outcome": self.outcome,
-            "transcript": self.transcript,
-            "conversation": self.conversation,
+            "rawWhisperTranscript": self.raw_whisper_transcript,
             "transcriptText": self.transcript_text,
             "audio": self.audio,
             "suggestedTasks": self.suggested_tasks,

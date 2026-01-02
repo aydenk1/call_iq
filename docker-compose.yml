@@ -21,7 +21,7 @@ services:
       - seccomp=unconfined
       - apparmor=unconfined
       - label=disable
-    shm_size: "32g"
+    shm_size: "16g"
     tty: true
     working_dir: /app
     volumes:

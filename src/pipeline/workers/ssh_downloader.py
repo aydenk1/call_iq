@@ -3,28 +3,15 @@ import logging
 import os
 import subprocess
 from contextlib import ExitStack
-from itertools import islice
 from multiprocessing import Event, Process
 from pathlib import Path
 from shutil import rmtree
-from typing import Sequence
 
-from sqlmodel import select
 from tqdm import tqdm
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
-
-AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
-
-
-def chunked(seq: Sequence, n: int):
-    it = iter(seq)
-    while True:
-        chunk = list(islice(it, n))
-        if not chunk:
-            return
-        yield chunk
+from pipeline.utils.const import AUDIO_EXTS, chunked
 
 
 class SSHDownloader(Process):
@@ -110,10 +97,7 @@ class SSHDownloader(Process):
 
             record_map: dict[str, CallRecord] = {}
             for chunk in chunked(list(ids), 1000):
-                records = session.exec(
-                    select(CallRecord).where(CallRecord.id.in_(chunk))
-                ).all()
-                record_map.update({r.id: r for r in records})
+                record_map.update(CallRecord.get_from_id(session, chunk))
             missing = ids - record_map.keys()
             
             if len(missing):

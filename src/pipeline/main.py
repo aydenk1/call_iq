@@ -97,7 +97,6 @@ def main(argv: Sequence[str]) -> int:
         transcriber = WhisperTranscribe(
             input_root=recording_dir,
             output_root=whisper_dir,
-            use_db=True,
             **config["whisper"],
         )
         transcriber.start()

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import mimetypes
 import os
+from pathlib import Path
 from typing import Sequence
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlmodel import Session
 
 from .db import Database
@@ -63,3 +66,19 @@ def get_call_record(call_id: str, session: Session = Depends(get_session)) -> di
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     return call.to_camel_dict()
+
+
+@app.get("/audio/{call_id}")
+def stream_call_audio(call_id: str, session: Session = Depends(get_session)) -> FileResponse:
+    call = CallRecord.get(session=session, call_id=call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if not call.audio_file_path:
+        raise HTTPException(status_code=404, detail="Audio file not available")
+
+    audio_path = Path(call.audio_file_path)
+    if not audio_path.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    media_type, _ = mimetypes.guess_type(str(audio_path))
+    return FileResponse(path=audio_path, media_type=media_type or "application/octet-stream")
