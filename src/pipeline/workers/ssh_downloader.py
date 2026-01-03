@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
-from pipeline.utils.const import AUDIO_EXTS, chunked
+from pipeline.utils import AUDIO_EXTS, chunked, setup_worker_logging
 
 
 class SSHDownloader(Process):
@@ -19,7 +19,9 @@ class SSHDownloader(Process):
                  remote_host: str,
                  remote_dir: str,
                  local_dir: str,
-                 sleep_s: int = 60) -> None:
+                 sleep_s: int = 60,
+                 log_level: int | None = None,
+                 log_dir: Path | None = None) -> None:
         super().__init__()
         self.remote_host = remote_host
         self.remote_dir = Path(remote_dir)
@@ -28,6 +30,8 @@ class SSHDownloader(Process):
         self.local_temp_dir = self.local_dir.parent / f"{self.local_dir.name}.tmp"
         rmtree(self.local_temp_dir, ignore_errors=True)
         self.sleep_s = sleep_s
+        self.log_level = log_level
+        self.log_dir = log_dir
         self._stop_event = Event()
         self._db: Database | None = None
         
@@ -58,7 +62,7 @@ class SSHDownloader(Process):
 
     def get_db_queue(self) -> set[str]:
         with self.db.session() as session:
-            return CallRecord.list_ids(session, status=PipelineStatus.QUEUED)
+            return CallRecord.list_ids(session, status=PipelineStatus.DOWNLOAD_QUEUED)
 
     def get_local_recordings(self) -> list[Path]:
         return sorted(
@@ -108,14 +112,14 @@ class SSHDownloader(Process):
                 if local_path.suffix in AUDIO_EXTS:
                     call = record_map[local_path.stem]
                     call.audio_file_path = str(local_path)
-                    call.status = PipelineStatus.DOWNLOADED
+                    call.set_status(session, PipelineStatus.DOWNLOADED, source=self.name)
                     call_records += 1
 
             # Update DB failed_transfers
             for local_path in failed_transfers:
                 if local_path.suffix in AUDIO_EXTS:
                     call = record_map[local_path.stem]
-                    call.status = PipelineStatus.FAILED
+                    call.set_status(session, PipelineStatus.FAILED, source=self.name)
                     call_records += 1
             
             logging.info(f"Updated {call_records} call records")
@@ -157,8 +161,12 @@ class SSHDownloader(Process):
         for rp in abs_remote_paths:
             rel = rp.relative_to(self.remote_dir)
             lp = self.local_dir / rel
-            # Download if file doesnt exist on server or download is queued. 
-            if not lp.exists() or (download_queue is None or rel.stem in download_queue):
+            # Only download files in queue, if set, if not already on the server
+            if download_queue is not None:
+                if not lp.exists() and rel.stem in download_queue: 
+                    queue_paths_rel.append(str(rel))
+                    queue_paths_abs.append(str(rp))
+            elif not lp.exists():
                 queue_paths_rel.append(str(rel))
                 queue_paths_abs.append(str(rp))
 
@@ -265,11 +273,15 @@ class SSHDownloader(Process):
 
     def run(self) -> None:
         """ Start file sync based off of DB records """
+        if self.log_level is not None:
+            if self.log_dir is None:
+                raise ValueError("log_dir is required when log_level is set.")
+            setup_worker_logging(self.name, self.log_level, self.log_dir)
         while not self._stop_event.is_set():
             # Check for any files that need to be redownloaded, occurs when CallRecord.status == "QUEUED"
             download_queue = self.get_db_queue()
             logging.info(f"Found {len(download_queue)} calls to download.")
-            if download_queue:
+            if len(download_queue):
                 total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer(download_queue)
                 moved: list[Path] = []
                 skipped: list[Path] = []

@@ -19,19 +19,10 @@ from typing import Any, Sequence
 import yaml
 
 from api.db import Database
+from pipeline.utils import configure_logging
 from pipeline.workers.ssh_downloader import SSHDownloader
 from pipeline.workers.unifi_ingest import UniFiCallIngestion, UniFiOSClient
 from pipeline.workers.whisper_transcribe import WhisperTranscribe
-
-
-def configure_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] [%(processName)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    logging.getLogger("urllib3").setLevel(level)
 
 def load_config(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
@@ -52,7 +43,9 @@ def main(argv: Sequence[str]) -> int:
     recording_dir = work_dir / config["global"]["recording_dir"]
     whisper_dir = work_dir / config["global"]["whisper_dir"]
 
-    configure_logging(config["global"]["verbose"])    
+    log_level = logging.DEBUG if config["global"]["verbose"] else logging.INFO
+    configure_logging(log_level)
+    log_dir = work_dir / "logs"
 
     stop_requested = False
 
@@ -81,6 +74,8 @@ def main(argv: Sequence[str]) -> int:
             page_size=config["unifi_ingestion"]["page_size"],
             sleep_between_request_s=config["unifi_ingestion"]["sleep_between_request_s"],
             sleep_same_request_s=config["unifi_ingestion"]["sleep_same_request_s"],
+            log_level=log_level,
+            log_dir=log_dir,
 
         )
         unifi_ingestion.start()
@@ -89,7 +84,9 @@ def main(argv: Sequence[str]) -> int:
         downloader = SSHDownloader(
             remote_host=config["ssh"]["remote_host"],
             remote_dir=config["ssh"]["remote_path"],
-            local_dir=recording_dir
+            local_dir=recording_dir,
+            log_level=log_level,
+            log_dir=log_dir,
         )
         downloader.start()
     
@@ -98,6 +95,8 @@ def main(argv: Sequence[str]) -> int:
             input_root=recording_dir,
             output_root=whisper_dir,
             **config["whisper"],
+            log_level=log_level,
+            log_dir=log_dir,
         )
         transcriber.start()
 

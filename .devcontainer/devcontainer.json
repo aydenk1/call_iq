@@ -23,6 +23,7 @@
     }
   },
   "mounts": [
-    "source=vscode-server,target=/root/.vscode-server,type=volume"
+    "source=vscode-server,target=/root/.vscode-server,type=volume",
+    "source=codex_home,target=/root/.codex,type=volume"
   ]
 }

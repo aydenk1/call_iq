@@ -18,8 +18,7 @@ from tqdm import tqdm
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
-from pipeline.utils.const import AUDIO_EXTS, chunked
-from pipeline.utils.subprocess_pool import SubprocessPool
+from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, setup_worker_logging
 
 
 @dataclass
@@ -172,6 +171,8 @@ class WhisperTranscribe(Process):
         whisper_model_kwargs: dict[str, Any],
         sleep_s: float = 60,
         db_commit_batch_size: int = 32,
+        log_level: int | None = None,
+        log_dir: Path | None = None,
     ) -> None:
         """Configure the transcription pipeline and ensure output directories exist."""
         super().__init__()
@@ -195,6 +196,8 @@ class WhisperTranscribe(Process):
         self.whisper_model_kwargs: dict[str, Any] = whisper_model_kwargs
         self.sleep_s: float = sleep_s
         self.db_commit_batch_size: int = db_commit_batch_size
+        self.log_level = log_level
+        self.log_dir = log_dir
 
         self.left_channel_name: str = "customer"
         self.right_channel_name: str = "store"
@@ -524,20 +527,26 @@ class WhisperTranscribe(Process):
                     conversation_transcript = Transcript.from_json(json.loads(conversation.read_text()))
                     call_record.raw_whisper_transcript = conversation_transcript.to_dict()
                     call_record.transcript_text = conversation_transcript.text
-                    call_record.status = PipelineStatus.TRANSCRIBED
+                    call_record.set_status(session, PipelineStatus.TRANSCRIBED, source=self.name)
                     successfull_calls += 1
                 except Exception:
                     logging.exception(f"Failed to read transcript JSON under {self.output_root / call_id}")
                     failed_calls.append(call_id)
-                    call_record.status = PipelineStatus.FAILED
+                    call_record.set_status(session, PipelineStatus.FAILED, source=self.name)
             session.commit()
         logging.info(f"Updated {successfull_calls} call_records with transcripts.")
         return
 
     def run(self) -> None:
         """Execute the pipeline using DB state as the trigger."""
+        if self.log_level is not None:
+            if self.log_dir is None:
+                raise ValueError("log_dir is required when log_level is set.")
+            setup_worker_logging(self.name, self.log_level, self.log_dir)
+     
         while not self._stop_event.is_set():
-            for call_ids in chunked(self.get_call_ids(), self.db_commit_batch_size):
+            chunks = list(chunked(self.get_call_ids(), self.db_commit_batch_size))
+            for call_ids in chunks:
                 if not call_ids:
                     logging.info("No downloaded calls found.")
                     self._stop_event.wait(self.sleep_s)

@@ -16,6 +16,7 @@ requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
+from pipeline.utils import setup_worker_logging
 
 
 class UniFiAuthError(RuntimeError):
@@ -145,6 +146,8 @@ class UniFiCallIngestion(Process):
             call_url: str = "/proxy/talk/api/call_log",
             sleep_between_request_s: int = 60,
             sleep_same_request_s: float = .2,
+            log_level: int | None = None,
+            log_dir: Path | None = None,
         ):
         super().__init__()
         self.unifi_client: UniFiOSClient = unifi_client
@@ -154,6 +157,8 @@ class UniFiCallIngestion(Process):
         self.call_url = call_url
         self.sleep_between_request_s = sleep_between_request_s
         self.sleep_same_request_s = sleep_same_request_s
+        self.log_level = log_level
+        self.log_dir = log_dir
 
         self._stop_event = Event()
         self._db = None
@@ -203,27 +208,48 @@ class UniFiCallIngestion(Process):
         if self.is_alive():
             self.terminate()
             self.join(timeout=terminate_timeout)
-    
+
+    @staticmethod
+    def call_in_progress(call_data: dict[str, Any]) -> bool:
+        """ Checks if incoming call from UniFi is in progress"""
+        call_events = call_data.get("call_events", [])
+        for event in call_events:
+            if event["event"] == "call_hangup":
+                return False
+        return True
+
     def update_db(self, data: dict[str, Any]) -> None:
         if self._db is None:
             self._db = Database()
 
         with self._db.session() as session:
             call_records: list[CallRecord] = []
-
-            for call_uuid in data:
-                call = session.get(CallRecord, call_uuid)
-                created_at = self._parse_call_time(data[call_uuid].pop("time"))
-                duration_sec = data[call_uuid].pop("duration")
-                recording = data[call_uuid].pop("recording")
-                status = PipelineStatus.QUEUED if recording else PipelineStatus.FAILED
+            existing_call_records = CallRecord.get_from_id(session, data.keys())
+            for call_uuid, call_data in data.items():
+                call = existing_call_records.get(call_uuid, None)
+                created_at = self._parse_call_time(call_data["time"])
+                duration_sec = call_data["duration"]
+                recording = call_data.get("recording")
+                if recording is None:
+                    logging.warning(
+                        f"Call {call_uuid} missing recording; defaulting recording=False",
+                    )
+                    recording = False
+                    
                 if duration_sec is None:
                     logging.warning(
-                        f"Call {call_uuid} missing duration; marking FAILED with duration_sec=0",
+                        f"Call {call_uuid} missing duration; defaulting duration_sec=0",
                     )
                     duration_sec = 0
-                    recording = False
+
+                if self.call_in_progress(call_data):
+                    status = PipelineStatus.CALL_IN_PROGRESS
+                elif recording:
+                    status = PipelineStatus.DOWNLOAD_QUEUED
+                else:
                     status = PipelineStatus.FAILED
+
+                
                 if call is None:
                     call = CallRecord(
                         id=call_uuid,
@@ -232,9 +258,16 @@ class UniFiCallIngestion(Process):
                         summary="",
                         status=status,
                         recording=recording,
-                        raw_call_log=data[call_uuid]
+                        raw_call_log=call_data
                     )
+                    call.set_status(session, status, source=self.name, initial=True)
                     call_records.append(call)
+                else:
+                    call.created_at = created_at
+                    call.duration_sec = duration_sec
+                    call.recording = recording
+                    call.raw_call_log = call_data
+                    call.set_status(session, status, source=self.name)
             
             if call_records:
                 session.add_all(call_records)
@@ -265,6 +298,10 @@ class UniFiCallIngestion(Process):
 
     def run(self) -> None:
         """ Start ingestion process and upload to the DB"""
+        if self.log_level is not None:
+            if self.log_dir is None:
+                raise ValueError("log_dir is required when log_level is set.")
+            setup_worker_logging(self.name, self.log_level, self.log_dir)
         while not self._stop_event.is_set():
             most_recent_call = self.most_recent_call
             data = self.get_data(most_recent_call)

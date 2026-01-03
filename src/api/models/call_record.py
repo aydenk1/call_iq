@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Collection
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Column
+from sqlalchemy import Column, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import Enum as SAEnum
 from sqlmodel import Field, Session, SQLModel, select
-from sqlalchemy import DateTime
 
 
 class PipelineStatus(Enum):
     FAILED = -1
-    QUEUED = 0
-    DOWNLOADED = 1
-    TRANSCRIBED = 2
-    FINISHED = 3
+    CALL_IN_PROGRESS = 0
+    DOWNLOAD_QUEUED = 1
+    DOWNLOADED = 2
+    TRANSCRIBED = 3
+    FINISHED = 4
     
 
 
@@ -40,7 +41,7 @@ class CallRecord(SQLModel, table=True):
     contact_profile: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB))
     raw_call_log: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     status: PipelineStatus = Field(
-        default=PipelineStatus.QUEUED,
+        default=PipelineStatus.CALL_IN_PROGRESS,
         sa_column=Column(SAEnum(PipelineStatus, name="pipeline_status"), index=True),
     )
 
@@ -55,7 +56,7 @@ class CallRecord(SQLModel, table=True):
         return list(session.exec(statement))
     
     @classmethod
-    def get_from_id(cls, session: Session, call_ids: list) -> dict[str, CallRecord]:
+    def get_from_id(cls, session: Session, call_ids: Collection[str]) -> dict[str, CallRecord]:
         statement = (
             select(cls)
             .where(CallRecord.id.in_(call_ids))
@@ -78,6 +79,29 @@ class CallRecord(SQLModel, table=True):
             statement = statement.where(cls.status == status)
         return set(session.exec(statement).all())
 
+    def set_status(
+        self,
+        session: Session,
+        new_status: PipelineStatus,
+        source: str | None = None,
+        detail: dict[str, Any] | None = None,
+        initial: bool = False,
+    ) -> bool:
+        if not initial and self.status == new_status:
+            return False
+
+        previous_status = None if initial else self.status
+        self.status = new_status
+        event = CallRecordStatusEvent(
+            call_id=self.id,
+            from_status=previous_status,
+            to_status=new_status,
+            source=source,
+            detail=detail or {},
+        )
+        session.add(event)
+        return True
+
     def to_camel_dict(self) -> dict[str, Any]:
         """Return API-friendly camelCase keys without reshaping DB columns."""
         return {
@@ -99,3 +123,18 @@ class CallRecord(SQLModel, table=True):
             "rawCallLog": self.raw_call_log,
             "status": self.status,
         }
+
+
+class CallRecordStatusEvent(SQLModel, table=True):
+    __tablename__ = "call_record_status_events"
+
+    id: int | None = Field(default=None, primary_key=True)
+    call_id: str = Field(foreign_key="call_records.id", index=True)
+    from_status: PipelineStatus | None = Field(default=None)
+    to_status: PipelineStatus
+    changed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), index=True),
+    )
+    source: str | None = Field(default=None)
+    detail: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
