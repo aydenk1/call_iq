@@ -2,6 +2,7 @@ alembic
 debugpy
 fastapi
 faster-whisper>=1.2.1
+openai-whisper
 psycopg[binary]
 PyYAML
 requests

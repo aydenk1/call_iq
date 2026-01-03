@@ -10,15 +10,13 @@ from multiprocessing import Event, Process
 from pathlib import Path
 from typing import Any, Self
 
-import ctranslate2
-from faster_whisper import BatchedInferencePipeline, WhisperModel
-from faster_whisper.transcribe import Segment
 from sqlmodel import select
 from tqdm import tqdm
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
 from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, setup_worker_logging
+from pipeline.whisper_models import TranscriptionInfo, WhisperBackend, create_whisper_backend
 
 
 @dataclass
@@ -169,6 +167,7 @@ class WhisperTranscribe(Process):
         merge_segments_s: float | None,
         force: dict[str, bool],
         whisper_model_kwargs: dict[str, Any],
+        whisper_backend: str = "faster-whisper",
         sleep_s: float = 60,
         db_commit_batch_size: int = 32,
         log_level: int | None = None,
@@ -184,7 +183,7 @@ class WhisperTranscribe(Process):
         self.batch_size: int = device_config[device]["batch_size"]
 
         self.num_workers: int = self._resolve_cpu_count(device_config[device]["num_workers"])
-        self.device: str = self._resolve_device(device_config[device]["device"]) 
+        self.device: str = device_config[device]["device"]
         self.compute_type: str = device_config[device]["compute_type"]
         self.merge_segments_s = merge_segments_s
         
@@ -194,6 +193,7 @@ class WhisperTranscribe(Process):
         self.force_postprocess: bool = force["postprocess"] or self.force_transcribe
 
         self.whisper_model_kwargs: dict[str, Any] = whisper_model_kwargs
+        self.whisper_backend: str = whisper_backend
         self.sleep_s: float = sleep_s
         self.db_commit_batch_size: int = db_commit_batch_size
         self.log_level = log_level
@@ -205,8 +205,7 @@ class WhisperTranscribe(Process):
         self._db = None
         self._stop_event = Event()
 
-        self._model: WhisperModel | None = None
-        self._pipeline: BatchedInferencePipeline | None = None
+        self._backend: WhisperBackend | None = None
     
     @property
     def db(self) -> Database:
@@ -224,21 +223,6 @@ class WhisperTranscribe(Process):
             self.join(timeout=terminate_timeout)
 
     @staticmethod
-    def _resolve_device(device) -> str:
-        """Return the best available device (CUDA or CPU)."""
-        if device != "auto":
-            logging.info(f"Forcing use of device: {device}")
-            return device
-        try:
-            if int(ctranslate2.get_cuda_device_count()) > 0:
-                logging.info("Using device: cuda")
-                return "cuda"
-        except Exception:
-            pass
-        logging.info("Using device: cpu")
-        return "cpu"
-    
-    @staticmethod
     def _resolve_cpu_count(num_workers) -> int:
         if num_workers != "auto":
             return num_workers
@@ -248,27 +232,16 @@ class WhisperTranscribe(Process):
             return 1
         return cpu_count
 
-    def _load_model(self) -> WhisperModel:
-        """Lazy-load the faster-whisper model instance."""
-        if self._model is None:
-            logging.info(f'Loading faster-whisper model {self.model_name} on {self.device} ({self.compute_type} {self.num_workers})')
-                
-            self._model = WhisperModel(
-                self.model_name,
+    def _load_backend(self) -> WhisperBackend:
+        if self._backend is None:
+            self._backend = create_whisper_backend(
+                backend=self.whisper_backend,
+                model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
-                cpu_threads=self.num_workers,
             )
-            self._pipeline = None  # reset pipeline so it can be rebuilt with the new model
-        return self._model
-
-    def _load_pipeline(self) -> BatchedInferencePipeline:
-        """Lazy-load the batched inference pipeline built from the model."""
-        if self._pipeline is None: 
-            logging.info("Initializing batched inference pipeline for faster-whisper")
-            self._pipeline = BatchedInferencePipeline(self._load_model())
-        return self._pipeline
+        return self._backend
 
     def get_call_ids(self) -> list[str]:
         """Return call_ids in DB with status == DOWNLOADED, ordered by newest first."""
@@ -386,14 +359,14 @@ class WhisperTranscribe(Process):
             logging.error(f"Splitting failures: \n{failed}")
         return set(src_files) - failed.keys()
 
-    def _transcribe_file(self, pipeline: BatchedInferencePipeline, audio_path: Path, transcribe_kwargs: dict[str, Any],) -> None:
+    def _transcribe_file(self, audio_path: Path, transcribe_kwargs: dict[str, Any]) -> None:
         """Transcribe a single mono channel and persist its transcript."""
-        segments_iter, info = pipeline.transcribe(
-            str(audio_path),
+        backend = self._load_backend()
+        segments, info = backend.transcribe(
+            audio_path,
             batch_size=self.batch_size,
             **transcribe_kwargs,
         )
-        segments = list(segments_iter)
         self._write_transcript(audio_path, info, segments)
 
     def transcribe(self, force_transcribe: bool, call_ids: set) -> set:
@@ -407,16 +380,15 @@ class WhisperTranscribe(Process):
 
         if not targets:
             logging.info("No files need transcription.")
-            return set()
+            return call_ids
 
-        pipeline = self._load_pipeline()
+        self._load_backend()
         failed: dict[str, Exception] = {}
         with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
             with ThreadPoolExecutor(max_workers=self.num_workers // 2) as executor:
                 future_to_audio = {
                     executor.submit(
                         self._transcribe_file,
-                        pipeline,
                         audio_path,
                         transcribe_kwargs=self.whisper_model_kwargs,
                     ): audio_path
@@ -438,20 +410,24 @@ class WhisperTranscribe(Process):
 
         return (call_ids - failed.keys())
 
-    def _write_transcript(self, audio_path: Path, info: Any, segments: list[Segment]) -> None:
+    def _write_transcript(
+        self,
+        audio_path: Path,
+        info: TranscriptionInfo,
+        segments: list[dict[str, Any]],
+    ) -> None:
         """Write the transcription metadata and segments to disk as JSON."""
         transcript_path = audio_path.with_suffix(".json")
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        segments_raw = [dataclasses.asdict(seg) for seg in segments]
+        text = " ".join(str(seg.get("text", "")).strip() for seg in segments).strip()
         payload = {
             "audio_file": str(audio_path),
             "channel": audio_path.stem,
-            "model": self.model_name,
+            "model": info.model,
             "text": text,
-            "language": getattr(info, "language", None),
-            "language_probability": getattr(info, "language_probability", None),
-            "duration": getattr(info, "duration", None),
-            "segments": segments_raw,
+            "language": info.language,
+            "language_probability": info.language_probability,
+            "duration": info.duration,
+            "segments": segments,
         }
         transcript_path.write_text(json.dumps(payload, indent=2))
 
@@ -545,14 +521,13 @@ class WhisperTranscribe(Process):
             setup_worker_logging(self.name, self.log_level, self.log_dir)
      
         while not self._stop_event.is_set():
-            chunks = list(chunked(self.get_call_ids(), self.db_commit_batch_size))
-            for call_ids in chunks:
-                if not call_ids:
-                    logging.info("No downloaded calls found.")
-                    self._stop_event.wait(self.sleep_s)
-                    continue
+            calls = self.get_call_ids()
+            logging.info(f"Found {len(calls)} calls with CallRecord.Status == 'DOWNLOADED'")
+            for call_chunk in chunked(calls, self.db_commit_batch_size):
+                if not call_chunk:
+                    break
 
-                completed_ids = self.run_transcription_pipeline(set(call_ids))
+                completed_ids = self.run_transcription_pipeline(set(call_chunk))
                 if completed_ids:
                     self.update_db(completed_ids)
             self._stop_event.wait(self.sleep_s)
