@@ -163,6 +163,12 @@ class UniFiCallIngestion(Process):
         self._stop_event = Event()
         self._db = None
 
+    @property
+    def db(self) -> Database:
+        if self._db is None:
+            self._db = Database()
+        return self._db
+
     def get_data(self, most_recent_call: datetime | None) -> dict[str, dict[str, Any]]:
         """ Pulls all call logs from Unifi router and early exits if 
             incoming data is older than most_recent call
@@ -222,11 +228,9 @@ class UniFiCallIngestion(Process):
             return True
         return False
 
-    def update_db(self, data: dict[str, Any]) -> None:
-        if self._db is None:
-            self._db = Database()
-
-        with self._db.session() as session:
+    def update_db(self, data: dict[str, Any]) -> int:
+        with self.db.session() as session:
+            cr_modified: int = 0
             call_records: list[CallRecord] = []
             existing_call_records = CallRecord.get_from_id(session, data.keys())
             for call_uuid, call_data in data.items():
@@ -234,16 +238,13 @@ class UniFiCallIngestion(Process):
                 created_at = self._parse_call_time(call_data["time"])
                 duration_sec = call_data["duration"]
                 recording = call_data.get("recording")
+
                 if recording is None:
-                    logging.warning(
-                        f"Call {call_uuid} missing recording; defaulting recording=False",
-                    )
+                    logging.warning(f"Call {call_uuid} missing recording; defaulting recording=False")
                     recording = False
                     
                 if duration_sec is None:
-                    logging.warning(
-                        f"Call {call_uuid} missing duration; defaulting duration_sec=0",
-                    )
+                    logging.warning(f"Call {call_uuid} missing duration; defaulting duration_sec=0")
                     duration_sec = 0
 
                 if self.call_in_progress(call_data):
@@ -252,7 +253,6 @@ class UniFiCallIngestion(Process):
                     status = PipelineStatus.DOWNLOAD_QUEUED
                 else:
                     status = PipelineStatus.FAILED
-
                 
                 if call is None:
                     call = CallRecord(
@@ -266,23 +266,23 @@ class UniFiCallIngestion(Process):
                     )
                     call.set_status(session, status, source=self.name, initial=True)
                     call_records.append(call)
-                else:
+                    cr_modified += 1
+                elif call.status.value < status.value:
                     call.created_at = created_at
                     call.duration_sec = duration_sec
                     call.recording = recording
                     call.raw_call_log = call_data
                     call.set_status(session, status, source=self.name)
+                    cr_modified += 1
             
             if call_records:
                 session.add_all(call_records)
             session.commit()
-        logging.info(f"Updated the DB with {len(call_records)} calls.")
+        return cr_modified
         
     @property
     def most_recent_call(self) -> datetime | None:
-        if self._db is None:
-            self._db = Database()
-        with self._db.session() as session:
+        with self.db.session() as session:
             statement = select(CallRecord.created_at).order_by(CallRecord.created_at.desc()).limit(1)
             return session.exec(statement).first()
         
@@ -307,6 +307,7 @@ class UniFiCallIngestion(Process):
                 raise ValueError("log_dir is required when log_level is set.")
             setup_worker_logging(self.name, self.log_level, self.log_dir)
         while not self._stop_event.is_set():
+            logging.info(f"Started event loop after {self.sleep_between_request_s}s")
             most_recent_call = self.most_recent_call
             data = self.get_data(most_recent_call)
 
@@ -316,7 +317,8 @@ class UniFiCallIngestion(Process):
                 most_recent_call = self._parse_call_time(data[most_recent_call_id]["time"])
                 logging.info(f"{self.name} Most recent call updated from {old_call_time} -> {most_recent_call.astimezone().strftime('%b %d, %Y %I:%M %p')}")
 
-            self.update_db(data)
+            modified_crs = self.update_db(data)
+            logging.info(f"Updated {modified_crs} calls in the DB.")
             self._stop_event.wait(self.sleep_between_request_s)
 
     @staticmethod

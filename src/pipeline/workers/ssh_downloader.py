@@ -86,18 +86,25 @@ class SSHDownloader(Process):
             hasher.update(b"\x00")
         return hasher.hexdigest()
     
-    def update_db(self, succeeded_transfers: list[Path], failed_transfers: list[Path]):
+    def update_db(
+            self, 
+            succeeded_transfers: list[Path], 
+            skipped_transfers: list[Path], 
+            failed_transfers: list[Path]
+        ) -> tuple[int, int, int]: 
         """ Updates all call records that have been successfully downloaded with
             the saved audio path and sets status to DOWNLOADED.
 
             Raise an exception if the call_id is not found. 
         """
         with self.db.session() as session:
-            call_records: int = 0
-            ids = {p.stem for p in succeeded_transfers + failed_transfers if p.suffix in AUDIO_EXTS}
+            cr_sucessful: int = 0
+            cr_skipped: int = 0
+            cr_failed: int = 0
+            ids = {p.stem for p in succeeded_transfers + skipped_transfers + failed_transfers if p.suffix in AUDIO_EXTS}
             if not ids:
                 logging.info("No call records to update")
-                return
+                return cr_sucessful, cr_skipped, cr_failed
 
             record_map: dict[str, CallRecord] = {}
             for chunk in chunked(list(ids), 1000):
@@ -113,17 +120,25 @@ class SSHDownloader(Process):
                     call = record_map[local_path.stem]
                     call.audio_file_path = str(local_path)
                     call.set_status(session, PipelineStatus.DOWNLOADED, source=self.name)
-                    call_records += 1
+                    cr_sucessful += 1
+            
+            # Updated DB skipped_transfers
+            for local_path in skipped_transfers:
+                if local_path.suffix in AUDIO_EXTS:
+                    call = record_map[local_path.stem]
+                    call.audio_file_path = str(local_path)
+                    call.set_status(session, PipelineStatus.DOWNLOADED, source=self.name)
+                    cr_skipped += 1
 
             # Update DB failed_transfers
             for local_path in failed_transfers:
                 if local_path.suffix in AUDIO_EXTS:
                     call = record_map[local_path.stem]
                     call.set_status(session, PipelineStatus.FAILED, source=self.name)
-                    call_records += 1
-            
-            logging.info(f"Updated {call_records} call records")
+                    cr_failed += 1
+    
             session.commit()
+            return cr_sucessful, cr_skipped, cr_failed
     
     def find_transfer_size(self, abs_remote_paths: list[str]):
         """
@@ -150,9 +165,11 @@ class SSHDownloader(Process):
             total += n
         return total
 
-    def prepare_transfer(self, download_queue: set[str] | None = None) -> tuple[int, list[str], list[str]]:
+    def prepare_transfer(self, download_queue: set[str] | None = None) -> tuple[int, list[str], list[str], list[Path]]:
+        """ Finds remote files and adds them to the download queue if not already on disk. """
         queue_paths_rel: list[str] = []
         queue_paths_abs: list[str] = []
+        skipped_paths: list[Path] = []
         cmd = [*self.ssh_base, "find", str(self.remote_dir), "-type", "f", "-print"]
         out = subprocess.check_output(cmd, text=True)
         abs_remote_paths = sorted([Path(line.strip()) for line in out.splitlines() if line.strip()])
@@ -163,16 +180,21 @@ class SSHDownloader(Process):
             lp = self.local_dir / rel
             # Only download files in queue, if set, if not already on the server
             if download_queue is not None:
-                if not lp.exists() and rel.stem in download_queue: 
+                if rel.stem in download_queue:
+                    if not lp.exists():
+                        queue_paths_rel.append(str(rel))
+                        queue_paths_abs.append(str(rp))
+                    else:
+                        skipped_paths.append(lp)
+            else:
+                if not lp.exists():
                     queue_paths_rel.append(str(rel))
                     queue_paths_abs.append(str(rp))
-            elif not lp.exists():
-                queue_paths_rel.append(str(rel))
-                queue_paths_abs.append(str(rp))
+                else:
+                    skipped_paths.append(lp)
 
         total_size = sum([self.find_transfer_size(chunk) for chunk in chunked(queue_paths_abs, 250)])
-        logging.info(f"Found {len(queue_paths_rel)} files to download totaling {(total_size / (1024 ** 2)):.2f} MiB")
-        return total_size, queue_paths_rel, queue_paths_abs
+        return total_size, queue_paths_rel, queue_paths_abs, skipped_paths
     
     def transfer(self, total_size: int, queue_paths_rel: list[str]) -> None:
         self.local_temp_dir.mkdir(parents=True, exist_ok=True)
@@ -236,19 +258,18 @@ class SSHDownloader(Process):
     
     def finalize_transfer(self, queue_paths_rel: list[str]) -> tuple[list[Path], list[Path]]:
         """
-        Move all files from recordings.tmp into recordings (only if missing).
-        Returns (moved_files.
+        Move all files from recordings.tmp into recordings.
+        Returns (moved_files, failed_files)
         """
         moved = []
-        skipped = []
+        failed = []
 
         for rel in queue_paths_rel:
             src = self.local_temp_dir / rel
             if not src.is_file():
-                skipped.append(src)
+                failed.append(src)
                 continue
 
-            rel = src.relative_to(self.local_temp_dir)
             dst = self.local_dir / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
 
@@ -256,13 +277,12 @@ class SSHDownloader(Process):
             moved.append(dst)
                     
         rmtree(self.local_temp_dir, ignore_errors=True)
-        logging.info(f"Finalize: moved {len(moved)}, skipped {len(skipped)}")
-        return moved, skipped
+        return moved, failed
     
     def run_file(self) -> None:
         """ Old run method for local testing."""
         while not self._stop_event.is_set():
-            total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer()
+            total_size, queue_paths_rel, _queue_paths_abs, skipped = self.prepare_transfer()
             if not queue_paths_rel:
                 logging.info("No new files to download.")
             else:
@@ -277,21 +297,28 @@ class SSHDownloader(Process):
             if self.log_dir is None:
                 raise ValueError("log_dir is required when log_level is set.")
             setup_worker_logging(self.name, self.log_level, self.log_dir)
+
         while not self._stop_event.is_set():
             # Check for any files that need to be redownloaded, occurs when CallRecord.status == "QUEUED"
+            logging.info(f"Started event loop after {self.sleep_s}s")
             download_queue = self.get_db_queue()
-            logging.info(f"Found {len(download_queue)} calls to download.")
+            logging.info(f"Found {len(download_queue)} calls with CallRecord.status == 'QUEUED'")
+
             if len(download_queue):
-                total_size, queue_paths_rel, _queue_paths_abs = self.prepare_transfer(download_queue)
-                moved: list[Path] = []
-                skipped: list[Path] = []
+                successful: list[Path] = []
+                failed: list[Path] = []
+                total_size, queue_paths_rel, _queue_paths_abs, skipped = self.prepare_transfer(download_queue)
+                logging.info(f"Found {len(queue_paths_rel)} files to download totaling {(total_size / (1024 ** 2)):.2f} MiB")
+
+                
                 if not queue_paths_rel:
                     logging.info("No new files to download.")
                 else:
                     self.transfer(total_size, queue_paths_rel)
-                    moved, skipped = self.finalize_transfer(queue_paths_rel)
-                self.update_db(moved, skipped)
-            else:
-                logging.info("No queued calls found.")
+                    successful, failed = self.finalize_transfer(queue_paths_rel)
+                    logging.info(f"Finalize transfer {self.local_temp_dir} -> {self.local_dir}: moved {len(successful)}, failed {len(failed)}")
+
+                ss, sk, f = self.update_db(successful, skipped, failed)
+                logging.info(f"Updated the DB:\t{ss} successful\t{sk} skipped\t{f} failed")
             self._stop_event.wait(self.sleep_s)
             

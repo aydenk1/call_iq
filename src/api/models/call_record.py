@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection
 from datetime import datetime, timezone
 from enum import Enum
@@ -86,8 +87,11 @@ class CallRecord(SQLModel, table=True):
         source: str | None = None,
         detail: dict[str, Any] | None = None,
         initial: bool = False,
+        force: bool = False
     ) -> bool:
-        if not initial and self.status == new_status:
+        if not initial and new_status.value <= self.status.value:
+            logging.warning(f"Attempting to set status to the same or lessor value (this shouldn't happen):"
+                         f"\tcurrent status: {self.status}\tnew status: {new_status}")
             return False
 
         previous_status = None if initial else self.status
