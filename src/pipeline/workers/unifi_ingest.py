@@ -211,12 +211,16 @@ class UniFiCallIngestion(Process):
 
     @staticmethod
     def call_in_progress(call_data: dict[str, Any]) -> bool:
-        """ Checks if incoming call from UniFi is in progress"""
+        """ Checks if incoming call from UniFi is in progress
+            1. Look for call_accepted status
+            2. If accepted, see if hangup event has occured            
+        """
         call_events = call_data.get("call_events", [])
-        for event in call_events:
-            if event["event"] == "call_hangup":
-                return False
-        return True
+        call_accepted = any("call_accepted" in event.values() for event in call_events)
+        call_hangup = any("call_hangup" in event.values() for event in call_events)
+        if call_accepted and not call_hangup:
+            return True
+        return False
 
     def update_db(self, data: dict[str, Any]) -> None:
         if self._db is None:
