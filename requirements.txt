@@ -9,3 +9,4 @@ requests
 sqlmodel
 tqdm>=4.66
 uvicorn[standard]
+whisperx
