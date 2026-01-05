@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import ctranslate2
 from faster_whisper import BatchedInferencePipeline, WhisperModel
 
-from .base import TranscriptionInfo
+from .base import TranscriptionInfo, TranscriptionResult
 
 
 class FasterWhisperBackend:
@@ -86,3 +87,39 @@ class FasterWhisperBackend:
             language_probability=getattr(info, "language_probability", None),
             duration=getattr(info, "duration", None),
         )
+
+    def __call__(
+        self,
+        audio_paths: list[Path],
+        batch_size: int,
+        **kwargs: Any,
+    ) -> Iterable[TranscriptionResult]:
+        if not audio_paths:
+            return
+        
+        self._load_pipeline()
+        max_workers = max(1, self.num_workers // 2)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_audio = {
+                executor.submit(self.transcribe, audio_path, batch_size, **kwargs): audio_path
+                for audio_path in audio_paths
+            }
+        
+            for future in as_completed(future_to_audio):
+                audio_path = future_to_audio[future]
+                try:
+                    segments, info = future.result()
+                except Exception as exc:
+                    yield TranscriptionResult(
+                        audio_path=audio_path,
+                        segments=None,
+                        info=None,
+                        error=exc,
+                    )
+                else:
+                    yield TranscriptionResult(
+                        audio_path=audio_path,
+                        segments=segments,
+                        info=info,
+                        error=None,
+                    )

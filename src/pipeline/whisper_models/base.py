@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 
 @dataclass(frozen=True)
@@ -11,6 +11,14 @@ class TranscriptionInfo:
     language: str | None
     language_probability: float | None
     duration: float | None
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    audio_path: Path
+    segments: list[dict[str, Any]] | None
+    info: TranscriptionInfo | None
+    error: Exception | None
 
 
 class WhisperBackend(Protocol):
@@ -22,4 +30,12 @@ class WhisperBackend(Protocol):
         batch_size: int,
         **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], TranscriptionInfo]:
+        ...
+
+    def __call__(
+        self,
+        audio_paths: list[Path],
+        batch_size: int,
+        **kwargs: Any,
+    ) -> Iterable[TranscriptionResult]:
         ...

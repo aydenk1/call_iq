@@ -90,9 +90,10 @@ class CallRecord(SQLModel, table=True):
         force: bool = False
     ) -> bool:
         if not initial and new_status.value <= self.status.value:
-            logging.warning(f"Attempting to set status to the same or lessor value (this shouldn't happen):"
+            logging.warning(f"Status update to the same or lessor value (this shouldn't happen):"
                          f"\tcurrent status: {self.status}\tnew status: {new_status}")
-            return False
+            if not force:
+                return False
 
         previous_status = None if initial else self.status
         self.status = new_status
