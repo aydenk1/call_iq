@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import TranscriptionInfo, WhisperBackend
+from .base import TranscriptionInfo, TranscriptionResult, WhisperBackend
 from .faster_whisper_backend import FasterWhisperBackend
 from .openai_whisper_backend import OpenAIWhisperBackend
 

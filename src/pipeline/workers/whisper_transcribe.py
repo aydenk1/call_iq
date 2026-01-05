@@ -4,7 +4,7 @@ import dataclasses
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from dataclasses import dataclass
 from multiprocessing import Event, Process
 from pathlib import Path
@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
-from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, setup_worker_logging
+from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, configure_logging, setup_worker_logging, update_call_record_status
 from pipeline.whisper_models import TranscriptionInfo, WhisperBackend, create_whisper_backend
 
 
@@ -169,7 +169,7 @@ class WhisperTranscribe(Process):
         whisper_model_kwargs: dict[str, Any],
         whisper_backend: str = "faster-whisper",
         sleep_s: float = 60,
-        db_commit_batch_size: int = 32,
+        db_commit_batch_size: int = 64,
         log_level: int | None = None,
         log_dir: Path | None = None,
     ) -> None:
@@ -206,12 +206,40 @@ class WhisperTranscribe(Process):
         self._stop_event = Event()
 
         self._backend: WhisperBackend | None = None
+        self._transcribe_config = {
+            "backend": self.whisper_backend,
+            "model_name": self.model_name,
+            "batch_size": self.batch_size,
+            "num_workers": self.num_workers,
+            "device": self.device,
+            "compute_type": self.compute_type,
+            "merge_segments_s": self.merge_segments_s,
+            "force": {
+                "preprocess": self.force_preprocess,
+                "transcribe": self.force_transcribe,
+                "postprocess": self.force_postprocess,
+            },
+            "whisper_model_kwargs": dict(self.whisper_model_kwargs),
+        }
     
     @property
     def db(self) -> Database:
         if self._db is None:
             self._db = Database()
         return self._db
+    
+    @property
+    def backend(self) -> WhisperBackend:
+        if self._backend is None:
+            self._backend = create_whisper_backend(
+                backend=self.whisper_backend,
+                model_name=self.model_name,
+                device=self.device,
+                compute_type=self.compute_type,
+                num_workers=self.num_workers,
+            )
+        return self._backend
+
 
     def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
         self._stop_event.set()
@@ -231,18 +259,7 @@ class WhisperTranscribe(Process):
         if cpu_count is None:
             return 1
         return cpu_count
-
-    def _load_backend(self) -> WhisperBackend:
-        if self._backend is None:
-            self._backend = create_whisper_backend(
-                backend=self.whisper_backend,
-                model_name=self.model_name,
-                device=self.device,
-                compute_type=self.compute_type,
-                num_workers=self.num_workers,
-            )
-        return self._backend
-
+        
     def get_call_ids(self) -> list[str]:
         """Return call_ids in DB with status == DOWNLOADED, ordered by newest first."""
         with self.db.session() as session:
@@ -359,16 +376,6 @@ class WhisperTranscribe(Process):
             logging.error(f"Splitting failures: \n{failed}")
         return set(src_files) - failed.keys()
 
-    def _transcribe_file(self, audio_path: Path, transcribe_kwargs: dict[str, Any]) -> None:
-        """Transcribe a single mono channel and persist its transcript."""
-        backend = self._load_backend()
-        segments, info = backend.transcribe(
-            audio_path,
-            batch_size=self.batch_size,
-            **transcribe_kwargs,
-        )
-        self._write_transcript(audio_path, info, segments)
-
     def transcribe(self, force_transcribe: bool, call_ids: set) -> set:
         """Transcribe each split file in parallel, tracking failures and progress."""
         targets: list[Path] = []
@@ -382,27 +389,19 @@ class WhisperTranscribe(Process):
             logging.info("No files need transcription.")
             return call_ids
 
-        self._load_backend()
         failed: dict[str, Exception] = {}
         with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
-            with ThreadPoolExecutor(max_workers=self.num_workers // 2) as executor:
-                future_to_audio = {
-                    executor.submit(
-                        self._transcribe_file,
-                        audio_path,
-                        transcribe_kwargs=self.whisper_model_kwargs,
-                    ): audio_path
-                    for audio_path in targets
-                }
-                for future in as_completed(future_to_audio):
-                    audio_path = future_to_audio[future]
-                    try:
-                        future.result()
-                    except Exception as exc:  # pragma: no cover - whisper errors depend on runtime env
-                        logging.exception(f"Failed to transcribe {audio_path}")
-                        failed[audio_path.parent.name] = exc
-                    finally:
-                        pbar.update(1)
+            for result in self.backend(
+                targets,
+                batch_size=self.batch_size,
+                **self.whisper_model_kwargs,
+            ):
+                if result.error:  # pragma: no cover - whisper errors depend on runtime env
+                    logging.exception(f"Failed to transcribe {result.audio_path}")
+                    failed[result.audio_path.parent.name] = result.error
+                else:
+                    self._write_transcript(result.audio_path, result.info, result.segments)
+                pbar.update(1)
 
         logging.info(f"Transcription complete. total={len(targets)} failed={len(failed)}")
         if failed:
@@ -466,6 +465,7 @@ class WhisperTranscribe(Process):
                 continue
             
             complete_transcript = Transcript.merge_transcripts(left_transcript, right_transcript, self.merge_segments_s)
+            complete_transcript.metadata["whisper_transcribe"] = dict(self._transcribe_config)
             out_json.write_text(json.dumps(complete_transcript.to_dict(), indent=2))
             out_txt.write_text(complete_transcript.text)
             transcripts.append(complete_transcript)
@@ -494,14 +494,12 @@ class WhisperTranscribe(Process):
             
             for call_id in record_map:
                 call_record = record_map[call_id]
-                # speaker_1_transpath = self.output_root / call_id / f"{self.left_channel_name}.json"
-                # speaker_2_transpath = self.output_root / call_id / f"{self.right_channel_name}.json"
                 conversation = self.output_root / call_id / f"conversation.json"
                 try:
-                    # speaker_1_transcript = Transcript.from_json(json.loads(speaker_1_transpath.read_text()))
-                    # speaker_2_transcript = Transcript.from_json(json.loads(speaker_2_transpath.read_text()))
                     conversation_transcript = Transcript.from_json(json.loads(conversation.read_text()))
-                    call_record.raw_whisper_transcript = conversation_transcript.to_dict()
+                    raw_list = list(call_record.raw_whisper_transcript) if len(call_record.raw_whisper_transcript) else []
+                    raw_list.append(conversation_transcript.to_dict())
+                    call_record.raw_whisper_transcript = raw_list
                     call_record.transcript_text = conversation_transcript.text
                     call_record.set_status(session, PipelineStatus.TRANSCRIBED, source=self.name)
                     successfull_calls += 1
@@ -526,8 +524,55 @@ class WhisperTranscribe(Process):
             for call_chunk in chunked(calls, self.db_commit_batch_size):
                 if not call_chunk:
                     break
-
+                
+                st = time.perf_counter()
                 completed_ids = self.run_transcription_pipeline(set(call_chunk))
+                logging.info(f"Finished transcription chunk in {(time.perf_counter()-st) / 60:.3} mins")
                 if completed_ids:
                     self.update_db(completed_ids)
             self._stop_event.wait(self.sleep_s)
+
+
+def _load_config(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    import yaml
+
+    data = yaml.safe_load(path.read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"Config file must contain a YAML mapping: {path}")
+    return data
+
+
+if __name__ == "__main__":
+    base_dir = Path(__file__).resolve().parents[3]
+    config = _load_config(base_dir / "config.yml")
+    config["whisper"].pop("activate")
+
+    work_dir = Path(config["global"]["work_dir"])
+    if not work_dir.is_absolute():
+        work_dir = base_dir / work_dir
+    recording_dir = work_dir / config["global"]["recording_dir"]
+    whisper_dir = work_dir / config["global"]["whisper_dir"]
+
+    log_level = logging.DEBUG if config["global"]["verbose"] else logging.INFO
+    configure_logging(log_level)
+    log_dir = work_dir / "logs"
+
+    db = Database()
+    db.create_db_and_tables()
+
+    from pipeline.main import get_call_ids
+
+    update_call_record_status(db, get_call_ids(), PipelineStatus.DOWNLOADED)
+
+    transcriber = WhisperTranscribe(
+        input_root=recording_dir,
+        output_root=whisper_dir,
+        **config["whisper"],
+        log_level=log_level,
+        log_dir=log_dir,
+    )
+    completed_ids = transcriber.run_transcription_pipeline(set(get_call_ids()))
+    if completed_ids:
+        transcriber.update_db(completed_ids)

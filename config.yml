@@ -5,7 +5,7 @@ global:
   verbose: true # logging level
 
 unifi_ingestion: # Ingests call log data from UniFi call logs
-  activate: true
+  activate: false
   base_url: "https://192.168.1.1"
   call_url: "/proxy/talk/api/call_log"
   page_size: "25"
@@ -13,23 +13,24 @@ unifi_ingestion: # Ingests call log data from UniFi call logs
   sleep_same_request_s: .2
   
 ssh: # Required for syncing new calls
-  activate: true # Use true to skip downloading of new calls
+  activate: false # Use true to skip downloading of new calls
   remote_host: "unifi-router"
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
-  activate: activate # Performs transcription of new calls
-  device: "ayden-sn1" # Select which device_config to use
+  activate: true # Performs transcription of new calls
+  device: "ayden-workstation" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
   db_commit_batch_size: 32 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
-    transcribe: false
+    transcribe: true
     postprocess: false
+  whisper_backend: "openai-whisper"
   whisper_model_kwargs:
     no_speech_threshold: 0.6 # (default is already 0.6)
     log_prob_threshold: -1.0 # (keep)
-    compression_ratio_threshold: 2.4 # (keep default) or tighten slightly
+    compression_ratio_threshold: 2.0 # (keep default) or tighten slightly
     beam_size: 5 # (quality bump without getting weird)
     best_of: 5 # (only used when temperature > 0; safe to include)
     language: "en"
@@ -37,11 +38,16 @@ whisper:
     patience: 1.0 # (don’t over-extend beams)
     temperature: 0.0 # (deterministic)
     without_timestamps: false
+    condition_on_previous_text: false
     vad_parameters:
       threshold: 0.55 # (slightly stricter than 0.5)
       min_silence_duration_ms: 500 # (split sooner; default 2000 is huge)
       speech_pad_ms: 120 # (default 400 is big)
       min_speech_duration_ms: 200 # (throw away tiny blips)
+    initial_prompt: >-
+      This is a phone call for an automotive and appliance shop, known as Oswalt-Thomas or Goodyear.
+      We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service, oil.
+      Common names: Ayden, Zach, Eric.
   device_config: # Fine tuned pipeline configs for best performance on available hardware
     ayden-sn1:
       model_name: "large-v3"
@@ -51,25 +57,22 @@ whisper:
       num_workers: "auto"  # Uses all cpu cores
 
     ayden-workstation:
-      model_name: "large-v3"
+      model_name: "large-v3-turbo"
       device: "cuda"
       compute_type: "float16"
       batch_size: 16
-      num_workers: "auto"  # Uses all cpu cores
+      num_workers: 1  # Uses all cpu cores
 
-    # initial_prompt: >-
-    #  This is a phone call for an auto and appliance shop, known as Oswalt-Thomas or Goodyear.
-    #  We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service.
-    #  Common names: Ayden, Zach, Eric.
-    # hotwords: >-
-    #  Oswalt-Thomas
-    #  Goodyear
-    #  Wabash
-    #  GE
-    #  tires
-    #  appliances
-    #  alignment
-    #  service
-    #  Ayden
-    #  Zach
-    #  Eric
+  
+  # hotwords: >-
+  #  Oswalt-Thomas
+  #  Goodyear
+  #  Wabash
+  #  GE
+  #  tires
+  #  appliances
+  #  alignment
+  #  service
+  #  Ayden
+  #  Zach
+  #  Eric
