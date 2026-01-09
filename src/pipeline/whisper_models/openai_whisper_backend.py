@@ -83,7 +83,6 @@ class OpenAIWhisperBackend(WhisperBackend):
     ) -> None:
         self.model_name = model_name
         self.device = self._resolve_device(device)
-        self.compute_type = compute_type
         self.num_workers = num_workers
         self._model = None
         self.model_kwargs = dict(model_kwargs or {})
@@ -230,7 +229,17 @@ class OpenAIWhisperBackend(WhisperBackend):
             }
             for future in as_completed(future_to_audio):
                 audio_paths = future_to_audio[future]
-                all_segments, all_t_infos = future.result()
+                try:
+                    all_segments, all_t_infos = future.result()
+                except Exception as exc:
+                    for audio_path in audio_paths:
+                        yield TranscriptionResult(
+                            audio_path=audio_path,
+                            segments=None,
+                            info=None,
+                            error=exc,
+                        )
+                    continue
                 for segments, info, audio_path in zip(all_segments, all_t_infos, audio_paths):
                     yield TranscriptionResult(
                         audio_path=audio_path,

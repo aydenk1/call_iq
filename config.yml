@@ -5,7 +5,7 @@ global:
   verbose: true # logging level
 
 unifi_ingestion: # Ingests call log data from UniFi call logs
-  activate: false
+  activate: true
   base_url: "https://192.168.1.1"
   call_url: "/proxy/talk/api/call_log"
   page_size: "25"
@@ -13,15 +13,15 @@ unifi_ingestion: # Ingests call log data from UniFi call logs
   sleep_same_request_s: .2
   
 ssh: # Required for syncing new calls
-  activate: false # Use true to skip downloading of new calls
+  activate: true # Use true to skip downloading of new calls
   remote_host: "unifi-router"
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
   activate: true # Performs transcription of new calls
-  device: "ayden-workstation" # Select which device_config to use
+  device: "ayden-sn1" # Select which device_config to use
   merge_segments_s: 2.0 # Set to null to skip segment mergeing
-  db_commit_batch_size: 32 # Process this many files before commiting to db.
+  db_commit_batch_size: 1 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
     transcribe: true
@@ -48,8 +48,12 @@ whisper:
       This is a phone call for an automotive and appliance shop, known as Oswalt-Thomas or Goodyear.
       We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service, oil.
       Common names: Ayden, Zach, Eric.
-    alignment_backend: "whisperx"
-    alignment_model_kwargs:
+  alignment_backend: "whisperx-alignment"
+  alignment_model_kwargs:
+    enabled: true
+    device: "cuda" # set to "cpu" if no GPU is available
+    model_name: null
+    return_char_alignments: false
     
   device_config: # Fine tuned pipeline configs for best performance on available hardware
     ayden-sn1:

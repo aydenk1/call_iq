@@ -170,7 +170,7 @@ class WhisperTranscribe(Process):
         whisper_model_kwargs: dict[str, Any],
         alignment_model_kwargs: dict[str, Any],
         whisper_backend: str = "faster-whisper",
-        alignment_backend: str = "whisperx",
+        alignment_backend: str = "whisperx-alignment",
         sleep_s: float = 60,
         db_commit_batch_size: int = 64,
         log_level: int | None = None,
@@ -257,11 +257,11 @@ class WhisperTranscribe(Process):
         if self._word_alignment_backend is None:
             self._word_alignment_backend = create_backend(
                 backend_name=self.alignment_backend_name,
-                model_name=self.model_name,
+                model_name=None,
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
-                model_kwargs=self.whisper_model_kwargs,
+                model_kwargs=self.alignment_model_kwargs,
             )
         return self._word_alignment_backend
 
@@ -385,9 +385,12 @@ class WhisperTranscribe(Process):
         if not commands:
             logging.info("No new recordings require channel splitting.")
             return set(src_files)
-
+        
+        # Override num workers as this is purely cpu dependent
+        num_workers = os.cpu_count()
+        num_workers =  num_workers if num_workers is not None else 1
         pool = SubprocessPool(
-            max_workers=self.num_workers,
+            max_workers= num_workers,
             capture_stdout=True,
             capture_stderr=True,
             nice=10,
@@ -437,7 +440,8 @@ class WhisperTranscribe(Process):
             if result.error:  # pragma: no cover - whisper errors depend on runtime env
                 logging.exception(f"Failed to transcribe {result.audio_path}")
                 failed[result.audio_path.parent.name] = result.error
-            self._write_transcript(result.audio_path, result.info, result.segments)
+            else:
+                self._write_transcript(result.audio_path, result.info, result.segments)
                 
         logging.info(f"Transcription complete. total={len(targets)} failed={len(failed)}")
         if failed:

@@ -101,7 +101,7 @@ def main(argv: Sequence[str]) -> int:
     downloader = None
     transcriber = None
 
-    update_call_record_status(db, get_call_ids(), PipelineStatus.DOWNLOADED)
+    # update_call_record_status(db, get_call_ids(), PipelineStatus.DOWNLOADED)
 
 
     if config["unifi_ingestion"].pop("activate"):
