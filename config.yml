@@ -26,7 +26,7 @@ whisper:
     preprocess: false
     transcribe: true
     postprocess: false
-  whisper_backend: "openai-whisper"
+  whisper_backend: "faster-whisper"
   whisper_model_kwargs:
     no_speech_threshold: 0.6 # (default is already 0.6)
     log_prob_threshold: -1.0 # (keep)
@@ -48,13 +48,16 @@ whisper:
       This is a phone call for an automotive and appliance shop, known as Oswalt-Thomas or Goodyear.
       We are based in Wabash, Indiana. Common terms: GE, tires, appliances, alignment, service, oil.
       Common names: Ayden, Zach, Eric.
+    alignment_backend: "whisperx"
+    alignment_model_kwargs:
+    
   device_config: # Fine tuned pipeline configs for best performance on available hardware
     ayden-sn1:
       model_name: "large-v3"
       device: "cuda"
       compute_type: "int8_float32"
       batch_size: 1
-      num_workers: "auto"  # Uses all cpu cores
+      num_workers: 1  # Uses all cpu cores
 
     ayden-workstation:
       model_name: "large-v3-turbo"

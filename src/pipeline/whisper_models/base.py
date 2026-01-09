@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, ClassVar
 
 
 @dataclass(frozen=True)
@@ -21,21 +21,22 @@ class TranscriptionResult:
     error: Exception | None
 
 
-class WhisperBackend(Protocol):
-    name: str
+class WhisperBackend:
+    name: ClassVar[str]
 
-    def transcribe(
-        self,
-        audio_path: Path,
-        batch_size: int,
-        **kwargs: Any,
-    ) -> tuple[list[dict[str, Any]], TranscriptionInfo]:
+    def __init__(
+            self,
+            model_name: str,
+            device: str,
+            compute_type: str,
+            num_workers: int,
+            model_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         ...
-
+        
     def __call__(
         self,
-        audio_paths: list[Path],
-        batch_size: int,
+        *args,
         **kwargs: Any,
     ) -> Iterable[TranscriptionResult]:
         ...

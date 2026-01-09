@@ -9,10 +9,10 @@ from typing import Any, Iterable
 import ctranslate2
 from faster_whisper import BatchedInferencePipeline, WhisperModel
 
-from .base import TranscriptionInfo, TranscriptionResult
+from .base import TranscriptionInfo, TranscriptionResult, WhisperBackend
 
 
-class FasterWhisperBackend:
+class FasterWhisperBackend(WhisperBackend):
     name = "faster-whisper"
 
     def __init__(
@@ -21,11 +21,13 @@ class FasterWhisperBackend:
         device: str,
         compute_type: str,
         num_workers: int,
+        model_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.model_name = model_name
         self.device = self._resolve_device(device)
         self.compute_type = compute_type
         self.num_workers = num_workers
+        self.model_kwargs = model_kwargs if model_kwargs is not None else {}
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
 
@@ -78,7 +80,7 @@ class FasterWhisperBackend:
         segments_iter, info = pipeline.transcribe(
             str(audio_path),
             batch_size=batch_size,
-            **kwargs,
+            **self.model_kwargs,
         )
         segments = [asdict(seg) for seg in segments_iter]
         return segments, TranscriptionInfo(

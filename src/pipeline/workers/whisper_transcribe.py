@@ -16,7 +16,8 @@ from tqdm import tqdm
 from api.db import Database
 from api.models import CallRecord, PipelineStatus
 from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, configure_logging, setup_worker_logging, update_call_record_status
-from pipeline.whisper_models import TranscriptionInfo, WhisperBackend, create_whisper_backend
+from pipeline.whisper_models import TranscriptionInfo, TranscriptionResult, WhisperBackend, create_backend
+from pipeline.whisper_models.whisperx_alignment_backend import WhisperXAlignmentBackend
 
 
 @dataclass
@@ -167,7 +168,9 @@ class WhisperTranscribe(Process):
         merge_segments_s: float | None,
         force: dict[str, bool],
         whisper_model_kwargs: dict[str, Any],
+        alignment_model_kwargs: dict[str, Any],
         whisper_backend: str = "faster-whisper",
+        alignment_backend: str = "whisperx",
         sleep_s: float = 60,
         db_commit_batch_size: int = 64,
         log_level: int | None = None,
@@ -175,6 +178,7 @@ class WhisperTranscribe(Process):
     ) -> None:
         """Configure the transcription pipeline and ensure output directories exist."""
         super().__init__()
+
         self.input_root: Path = Path(input_root)
         self.output_root: Path = Path(output_root)
         self.output_root.mkdir(parents=True, exist_ok=True)
@@ -193,7 +197,12 @@ class WhisperTranscribe(Process):
         self.force_postprocess: bool = force["postprocess"] or self.force_transcribe
 
         self.whisper_model_kwargs: dict[str, Any] = whisper_model_kwargs
-        self.whisper_backend: str = whisper_backend
+        self.whisper_backend_name: str = whisper_backend
+
+        self.activate_word_alignment: bool = True if len(alignment_backend) else False
+        self.alignment_model_kwargs: dict[str, Any] = alignment_model_kwargs
+        self.alignment_backend_name: str = alignment_backend
+
         self.sleep_s: float = sleep_s
         self.db_commit_batch_size: int = db_commit_batch_size
         self.log_level = log_level
@@ -205,9 +214,10 @@ class WhisperTranscribe(Process):
         self._db = None
         self._stop_event = Event()
 
-        self._backend: WhisperBackend | None = None
+        self._whisper_backend: WhisperBackend | None = None
+        self._word_alignment_backend: WhisperBackend | None = None
         self._transcribe_config = {
-            "backend": self.whisper_backend,
+            "backend": self.whisper_backend_name,
             "model_name": self.model_name,
             "batch_size": self.batch_size,
             "num_workers": self.num_workers,
@@ -220,6 +230,7 @@ class WhisperTranscribe(Process):
                 "postprocess": self.force_postprocess,
             },
             "whisper_model_kwargs": dict(self.whisper_model_kwargs),
+            "alignment_model_kwargs": dict(self.alignment_model_kwargs),
         }
     
     @property
@@ -229,16 +240,30 @@ class WhisperTranscribe(Process):
         return self._db
     
     @property
-    def backend(self) -> WhisperBackend:
-        if self._backend is None:
-            self._backend = create_whisper_backend(
-                backend=self.whisper_backend,
+    def whisper_backend(self) -> WhisperBackend:
+        if self._whisper_backend is None:
+            self._whisper_backend = create_backend(
+                backend_name=self.whisper_backend_name,
                 model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
+                model_kwargs=self.whisper_model_kwargs,
             )
-        return self._backend
+        return self._whisper_backend
+
+    @property
+    def word_alignment_backend(self) -> WhisperBackend:
+        if self._word_alignment_backend is None:
+            self._word_alignment_backend = create_backend(
+                backend_name=self.alignment_backend_name,
+                model_name=self.model_name,
+                device=self.device,
+                compute_type=self.compute_type,
+                num_workers=self.num_workers,
+                model_kwargs=self.whisper_model_kwargs,
+            )
+        return self._word_alignment_backend
 
 
     def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
@@ -390,19 +415,30 @@ class WhisperTranscribe(Process):
             return call_ids
 
         failed: dict[str, Exception] = {}
+        results: list[TranscriptionResult] = []
         with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
-            for result in self.backend(
+            for result in self.whisper_backend(
                 targets,
                 batch_size=self.batch_size,
-                **self.whisper_model_kwargs,
             ):
-                if result.error:  # pragma: no cover - whisper errors depend on runtime env
-                    logging.exception(f"Failed to transcribe {result.audio_path}")
-                    failed[result.audio_path.parent.name] = result.error
-                else:
-                    self._write_transcript(result.audio_path, result.info, result.segments)
+                results.append(result)
                 pbar.update(1)
+                
 
+        if self.activate_word_alignment:
+            aligned_results: list[TranscriptionResult] = []
+            with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
+                for result in self.word_alignment_backend(results):
+                    aligned_results.append(result)
+                    pbar.update(1)
+            results = aligned_results
+
+        for result in results:
+            if result.error:  # pragma: no cover - whisper errors depend on runtime env
+                logging.exception(f"Failed to transcribe {result.audio_path}")
+                failed[result.audio_path.parent.name] = result.error
+            self._write_transcript(result.audio_path, result.info, result.segments)
+                
         logging.info(f"Transcription complete. total={len(targets)} failed={len(failed)}")
         if failed:
             logging.error(f"Transcription failures:\n{failed}")

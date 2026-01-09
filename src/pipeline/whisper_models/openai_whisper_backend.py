@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Iterable
 
-from .base import TranscriptionInfo, TranscriptionResult
+from .base import TranscriptionInfo, TranscriptionResult, WhisperBackend
 from whisper import Whisper
 from pipeline.utils import chunked
 
@@ -26,7 +26,6 @@ def _init_worker(model_name: str, device: str) -> None:
         torch.set_num_interop_threads(10)
     except Exception:
         pass
-    import whisper
 
     _MODEL = OpenAIWhisperBackend._load_model(_MODEL_NAME, _MODEL_DEVICE)
     
@@ -71,7 +70,7 @@ def _transcribe_worker(audio_paths: list[Path], kwargs: dict[str, Any]) -> tuple
     return all_segments, all_t_infos
 
 
-class OpenAIWhisperBackend:
+class OpenAIWhisperBackend(WhisperBackend):
     name = "openai-whisper"
 
     def __init__(
@@ -80,17 +79,14 @@ class OpenAIWhisperBackend:
         device: str,
         compute_type: str,
         num_workers: int,
+        model_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.model_name = model_name
         self.device = self._resolve_device(device)
         self.compute_type = compute_type
         self.num_workers = num_workers
         self._model = None
-        self._align_model = None
-        self._align_metadata = None
-        self._align_language = None
-        self._align_device = None
-        self._align_model_name = None
+        self.model_kwargs = dict(model_kwargs or {})
 
     @staticmethod
     def convert_kwarg(**kwargs) -> dict:
@@ -152,100 +148,14 @@ class OpenAIWhisperBackend:
             self._model = self._load_model(self.model_name, self.device)
         return self._model
 
-    def _load_align_model(
-        self,
-        language: str,
-        *,
-        device: str,
-        model_name: str | None,
-    ):
-        if (
-            self._align_model is None
-            or self._align_language != language
-            or self._align_device != device
-            or self._align_model_name != model_name
-        ):
-            try:
-                import whisperx
-            except ImportError as exc:  # pragma: no cover - optional dependency
-                raise RuntimeError(
-                    "whisperx alignment requested but 'whisperx' is not installed. "
-                    "Install it with 'pip install -U whisperx'."
-                ) from exc
-            logging.info(
-                "Loading whisperx alignment model for language=%s on %s",
-                language,
-                device,
-            )
-            self._align_model, self._align_metadata = whisperx.load_align_model(
-                language_code=language,
-                device=device,
-                model_name=model_name,
-            )
-            self._align_language = language
-            self._align_device = device
-            self._align_model_name = model_name
-        return self._align_model, self._align_metadata
-
-    def _align_segments(
-        self,
-        audio_path: Path,
-        segments: list[dict[str, Any]],
-        *,
-        language: str | None,
-        device: str,
-        model_name: str | None,
-        return_char_alignments: bool,
-    ) -> list[dict[str, Any]]:
-        if not language:
-            logging.warning("Skipping whisperx alignment; language is unknown.")
-            return segments
-        try:
-            import whisperx
-        except ImportError:
-            logging.warning("Skipping whisperx alignment; whisperx is not installed.")
-            return segments
-        try:
-            align_model, metadata = self._load_align_model(
-                language,
-                device=device,
-                model_name=model_name,
-            )
-            aligned = whisperx.align(
-                segments,
-                align_model,
-                metadata,
-                str(audio_path),
-                device=device,
-                return_char_alignments=return_char_alignments,
-            )
-        except Exception:  # pragma: no cover - depends on runtime env
-            logging.exception("Failed whisperx alignment; returning unaligned segments.")
-            return segments
-        return aligned.get("segments", segments)
-
     def transcribe(
         self,
         audio_path: Path,
         batch_size: int,
         **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], TranscriptionInfo]:
-        align_with_whisperx = bool(kwargs.pop("whisperx_align", False))
-        align_model_name = kwargs.pop("whisperx_align_model", None)
-        align_device = kwargs.pop("whisperx_align_device", None) or self.device
-        return_char_alignments = bool(kwargs.pop("whisperx_return_char_alignments", False))
-
         result = self.model.transcribe(str(audio_path), **kwargs)
         raw_segments = result.get("segments", [])
-        if align_with_whisperx and raw_segments:
-            raw_segments = self._align_segments(
-                audio_path,
-                raw_segments,
-                language=result.get("language"),
-                device=align_device,
-                model_name=align_model_name,
-                return_char_alignments=return_char_alignments,
-            )
         segments: list[dict[str, Any]] = []
         for idx, seg in enumerate(raw_segments):
             segments.append(
@@ -263,7 +173,7 @@ class OpenAIWhisperBackend:
                     "no_speech_prob": seg.get("no_speech_prob"),
                 }
             )
-        duration = result.get("duration")
+        duration = result.get("duration", 0)
         if duration is None and segments:
             duration = max(seg.get("end") or 0 for seg in segments)
         return segments, TranscriptionInfo(
@@ -281,11 +191,14 @@ class OpenAIWhisperBackend:
     ) -> Iterable[TranscriptionResult]:
         if not audio_paths:
             return
-        
+        call_kwargs = dict(self.model_kwargs)
+        call_kwargs.update(kwargs)
+        call_kwargs = self.convert_kwarg(**call_kwargs)
+
         if self.num_workers <= 1:
             for audio_path in audio_paths:
                 try:
-                    segments, info = self.transcribe(audio_path, batch_size, **self.convert_kwarg(**kwargs))
+                    segments, info = self.transcribe(audio_path, batch_size, **call_kwargs)
                 except Exception as exc:
                     yield TranscriptionResult(
                         audio_path=audio_path,
@@ -312,22 +225,13 @@ class OpenAIWhisperBackend:
             initargs=(self.model_name, self.device),
         ) as executor:
             future_to_audio = {
-                executor.submit(_transcribe_worker, batch, self.convert_kwarg(**kwargs)): batch
+                executor.submit(_transcribe_worker, batch, call_kwargs): batch
                 for batch in batches
             }
             for future in as_completed(future_to_audio):
                 audio_paths = future_to_audio[future]
-                # try:
                 all_segments, all_t_infos = future.result()
                 for segments, info, audio_path in zip(all_segments, all_t_infos, audio_paths):
-                # except Exception as exc:
-                #     yield TranscriptionResult(
-                #         audio_path=audio_path,
-                #         segments=None,
-                #         info=None,
-                #         error=exc,
-                #     )
-                # else:
                     yield TranscriptionResult(
                         audio_path=audio_path,
                         segments=segments,
