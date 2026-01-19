@@ -4,6 +4,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from multiprocessing import Event, Process
@@ -76,6 +77,11 @@ class Transcript:
             if gap <= merge_threshold_s:
                 cur.end = max(cur.end, seg.end)
                 cur.text = f"{cur.text} {seg.text}".strip()
+                if cur.words or seg.words:
+                    cur.words = [*cur.words, *seg.words]
+                    cur.words.sort(
+                        key=lambda word: ConversationSegment._coerce_float(word.get("start")) or 0.0
+                    )
             else:
                 merged_segs.append(cur)
                 cur = seg
@@ -123,14 +129,21 @@ class ConversationSegment:
     text: str
     start: float
     end: float
-    avg_logprob: float
-    compression_ratio: float
+    avg_logprob: float | None
+    compression_ratio: float | None
+    words: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     
     @classmethod
     def from_json(cls, json: dict[str, Any]) -> Self:
         try:            
             return cls(
-                **json
+                speaker=json["speaker"],
+                text=json["text"],
+                start=json["start"],
+                end=json["end"],
+                avg_logprob=json.get("avg_logprob", None),
+                compression_ratio=json.get("compression_ratio", None),
+                words=cls._normalize_words(json.get("words", [])),
             )
         except KeyError as e:
             raise ValueError(f"Missing required field: {e}") from e
@@ -142,8 +155,9 @@ class ConversationSegment:
             text = json["text"]
             start = json["start"]
             end = json["end"]
-            avg_logprob = json["avg_logprob"]
-            compression_ratio = json["compression_ratio"]
+            avg_logprob = json.get("avg_logprob", None)
+            compression_ratio = json.get("compression_ratio", None)
+            words = cls._normalize_words(json.get("words", []))
             
             return cls(
                 speaker=speaker,
@@ -151,10 +165,170 @@ class ConversationSegment:
                 start=start,
                 end=end,
                 avg_logprob=avg_logprob,
-                compression_ratio=compression_ratio
+                compression_ratio=compression_ratio,
+                words=words,
             )
         except KeyError as e:
             raise ValueError(f"Missing required field: {e}") from e
+
+    @staticmethod
+    def _normalize_words(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            return [word for word in value if isinstance(word, dict)]
+        return []
+
+    def to_word_utterances(
+        self,
+        *,
+        max_gap_s: float = 0.8,
+        max_word_duration_s: float = 1.2,
+        min_word_duration_s: float = 0.04,
+        min_gap_s: float = 0.02,
+        max_words_per_utterance: int = 24,
+    ) -> list[dict[str, Any]]:
+        if not self.words:
+            return [
+                {
+                    "speaker": self.speaker,
+                    "start": self.start,
+                    "end": self.end,
+                    "text": self.text.strip(),
+                    "words": [],
+                }
+            ]
+
+        tightened_words = self._tighten_words(
+            self.words,
+            max_word_duration_s=max_word_duration_s,
+            min_word_duration_s=min_word_duration_s,
+            min_gap_s=min_gap_s,
+        )
+        if not tightened_words:
+            return [
+                {
+                    "speaker": self.speaker,
+                    "start": self.start,
+                    "end": self.end,
+                    "text": self.text.strip(),
+                    "words": [],
+                }
+            ]
+
+        utterances: list[dict[str, Any]] = []
+        current_words: list[dict[str, Any]] = []
+        last_end: float | None = None
+        for word in tightened_words:
+            if current_words and last_end is not None:
+                gap = word["start"] - last_end
+                if gap > max_gap_s or len(current_words) >= max_words_per_utterance:
+                    utterances.append(self._words_to_utterance(current_words))
+                    current_words = []
+            if not current_words:
+                last_end = None
+            current_words.append(word)
+            last_end = word["end"]
+        if current_words:
+            utterances.append(self._words_to_utterance(current_words))
+        return utterances
+
+    def _words_to_utterance(self, words: list[dict[str, Any]]) -> dict[str, Any]:
+        text = self._join_words([word["word"] for word in words])
+        return {
+            "speaker": self.speaker,
+            "start": words[0]["start"],
+            "end": words[-1]["end"],
+            "text": text,
+            "words": words,
+        }
+
+    @staticmethod
+    def _join_words(words: list[str]) -> str:
+        text = " ".join(word for word in words if word).strip()
+        text = re.sub(r"\s+([,.;:!?%])", r"\1", text)
+        text = re.sub(r"\s+('(?:[A-Za-z]+))", r"\1", text)
+        return text
+
+    @staticmethod
+    def _tighten_words(
+        words: list[dict[str, Any]],
+        *,
+        max_word_duration_s: float,
+        min_word_duration_s: float,
+        min_gap_s: float,
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for word in words:
+            if not isinstance(word, dict):
+                continue
+            token = str(word.get("word", "")).strip()
+            if not token:
+                continue
+            start = ConversationSegment._coerce_float(word.get("start"))
+            end = ConversationSegment._coerce_float(word.get("end"))
+            if start is None and end is None:
+                continue
+            if start is None:
+                start = max(0.0, (end or 0.0) - min_word_duration_s)
+            if end is None:
+                end = start + min_word_duration_s
+            if end < start:
+                start, end = end, start
+            normalized.append(
+                {
+                    "word": token,
+                    "start": max(0.0, start),
+                    "end": max(0.0, end),
+                    "score": word.get("score"),
+                }
+            )
+
+        if not normalized:
+            return []
+
+        normalized.sort(key=lambda item: (item["start"], item["end"]))
+        tightened: list[dict[str, Any]] = []
+        for idx, word in enumerate(normalized):
+            start = word["start"]
+            end = word["end"]
+
+            if end - start > max_word_duration_s:
+                end = start + max_word_duration_s
+            if end - start < min_word_duration_s:
+                end = start + min_word_duration_s
+
+            if tightened:
+                prev_end = tightened[-1]["end"]
+                if start < prev_end + min_gap_s:
+                    start = prev_end + min_gap_s
+                    if end < start + min_word_duration_s:
+                        end = start + min_word_duration_s
+
+            next_start = None
+            if idx + 1 < len(normalized):
+                next_start = normalized[idx + 1]["start"]
+            if next_start is not None and next_start > start:
+                end = min(end, next_start - min_gap_s)
+                if end < start + min_word_duration_s:
+                    end = start + min_word_duration_s
+
+            tightened.append(
+                {
+                    "word": word["word"],
+                    "start": start,
+                    "end": end,
+                    "score": word.get("score"),
+                }
+            )
+        return tightened
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 
 
@@ -430,7 +604,7 @@ class WhisperTranscribe(Process):
 
         if self.activate_word_alignment:
             aligned_results: list[TranscriptionResult] = []
-            with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
+            with tqdm(total=len(targets), desc="Aligning Word Timestamps", unit="file") as pbar:
                 for result in self.word_alignment_backend(results):
                     aligned_results.append(result)
                     pbar.update(1)

@@ -1,4 +1,5 @@
 import CallTable from "@/components/CallTable";
+import RefreshOnReturn from "@/components/RefreshOnReturn";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchCallRecords } from "@/lib/calls";
@@ -13,6 +14,7 @@ export default async function HomePage() {
 
   return (
     <main className="container space-y-10 py-10">
+      <RefreshOnReturn />
       <header className="flex flex-col gap-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-2xl">

@@ -7,6 +7,7 @@ import Transcript from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import PipelineStatusCard from "@/components/PipelineStatusCard";
 import { fetchCallRecords } from "@/lib/calls";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { getTagTone } from "@/lib/tag-tone";
@@ -101,6 +102,8 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
         </div>
 
         <aside className="space-y-6">
+          <PipelineStatusCard callId={call.id} status={call.status} />
+
           <Card>
             <CardHeader>
               <CardTitle>Suggested follow-ups</CardTitle>

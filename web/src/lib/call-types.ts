@@ -24,6 +24,7 @@ export type CallRecord = {
   createdAt: string;
   durationSec: number;
   summary: string;
+  status: string;
   impliedName?: string;
   externalNumber?: string;
   tags: string[];

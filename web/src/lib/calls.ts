@@ -1,4 +1,5 @@
 import type { CallRecord, TranscriptSegment } from "@/lib/call-types";
+import { normalizePipelineStatus } from "@/lib/pipeline-status";
 
 type ApiTranscriptSegment = {
   speaker?: string;
@@ -14,6 +15,7 @@ type ApiCallRecord = {
   createdAt: string;
   durationSec: number;
   summary?: string;
+  status?: unknown;
   impliedName?: string | null;
   externalNumber?: string | null;
   tags?: string[] | null;
@@ -98,11 +100,14 @@ const normalizeCallRecord = (call: ApiCallRecord): CallRecord => {
   const audioDuration =
     call.audio && call.audio.durationSec != null ? Number(call.audio.durationSec) : Number(call.durationSec);
 
+  const pipelineStatus = normalizePipelineStatus(call.status);
+
   return {
     id: call.id,
     createdAt: call.createdAt,
     durationSec: Number(call.durationSec),
     summary: call.summary?.trim() || summarizeTranscript(segments, call.transcriptText),
+    status: pipelineStatus,
     impliedName: call.impliedName ?? undefined,
     externalNumber: call.externalNumber ?? undefined,
     tags: call.tags ?? [],
@@ -146,6 +151,21 @@ export async function fetchCallRecord(callId: string): Promise<CallRecord | null
   }
   if (!response.ok) {
     throw new Error(`Failed to load call ${callId}: ${response.status}`);
+  }
+  const payload = await response.json();
+  return normalizeCallRecord(payload);
+}
+
+export async function updateCallStatus(callId: string, status: string): Promise<CallRecord> {
+  const response = await fetch(`${apiBaseUrl}/calls/${encodeURIComponent(callId)}/status`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update status: ${response.status}`);
   }
   const payload = await response.json();
   return normalizeCallRecord(payload);

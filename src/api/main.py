@@ -3,15 +3,16 @@ from __future__ import annotations
 import mimetypes
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from .db import Database
-from .models import CallRecord
+from .models import CallRecord, PipelineStatus
 
 
 def parse_origins(raw_origins: str | None) -> list[str]:
@@ -37,6 +38,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class StatusUpdate(BaseModel):
+    status: str | int
+    source: str | None = None
+    force: bool = True
+
+
+def parse_pipeline_status(value: Any) -> PipelineStatus:
+    if isinstance(value, PipelineStatus):
+        return value
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("Empty status")
+        if trimmed.lstrip("-").isdigit():
+            return PipelineStatus(int(trimmed))
+        key = trimmed.split(".")[-1].upper()
+        return PipelineStatus[key]
+    if isinstance(value, (int, float)) and float(value).is_integer():
+        return PipelineStatus(int(value))
+    raise ValueError("Unsupported status value")
 
 
 @app.on_event("startup")
@@ -65,6 +88,33 @@ def get_call_record(call_id: str, session: Session = Depends(get_session)) -> di
     call = CallRecord.get(session=session, call_id=call_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
+    return call.to_camel_dict()
+
+
+@app.patch("/calls/{call_id}/status")
+def update_call_status(
+    call_id: str,
+    payload: StatusUpdate,
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    call = CallRecord.get(session=session, call_id=call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    try:
+        new_status = parse_pipeline_status(payload.status)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    call.set_status(
+        session,
+        new_status,
+        source=payload.source or "ui",
+        force=payload.force,
+        detail={"updated_via": "api"},
+    )
+    session.add(call)
+    session.commit()
+    session.refresh(call)
     return call.to_camel_dict()
 
 

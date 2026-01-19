@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import AudioScrub from "@/components/AudioScrub";
 import Tag from "@/components/Tag";
@@ -18,6 +18,13 @@ import {
 import { formatDateTime, formatDuration } from "@/lib/format";
 import type { CallRecord } from "@/lib/call-types";
 import { getTagTone } from "@/lib/tag-tone";
+import { updateCallStatus } from "@/lib/calls";
+import {
+  PIPELINE_STATUS_ORDER,
+  formatPipelineStatus,
+  getPipelineStatusTone,
+  normalizePipelineStatus,
+} from "@/lib/pipeline-status";
 
 type SortDirection = "asc" | "desc";
 
@@ -26,15 +33,24 @@ type CallTableProps = {
 };
 
 export default function CallTable({ calls }: CallTableProps) {
+  const [callRows, setCallRows] = useState<CallRecord[]>(calls);
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingStatusId, setEditingStatusId] = useState<string | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState<Record<string, boolean>>({});
+  const [statusError, setStatusError] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    setCallRows(calls);
+    setEditingStatusId(null);
+  }, [calls]);
 
   const sortedCalls = useMemo(() => {
-    return [...calls].sort((a, b) => {
+    return [...callRows].sort((a, b) => {
       const diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       return sortDirection === "asc" ? diff : -diff;
     });
-  }, [calls, sortDirection]);
+  }, [callRows, sortDirection]);
 
   const toggleSort = () => {
     setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -42,6 +58,36 @@ export default function CallTable({ calls }: CallTableProps) {
 
   const toggleExpanded = (id: string) => {
     setExpandedId((current) => (current === id ? null : id));
+  };
+
+  const handleStatusChange = async (callId: string, nextStatus: string) => {
+    if (!nextStatus) {
+      return;
+    }
+    const previousStatus = callRows.find((call) => call.id === callId)?.status;
+    setCallRows((prev) =>
+      prev.map((call) => (call.id === callId ? { ...call, status: nextStatus } : call)),
+    );
+    setStatusUpdating((prev) => ({ ...prev, [callId]: true }));
+    setStatusError((prev) => ({ ...prev, [callId]: null }));
+    try {
+      const updated = await updateCallStatus(callId, nextStatus);
+      const normalized = normalizePipelineStatus(updated.status);
+      setCallRows((prev) =>
+        prev.map((call) => (call.id === callId ? { ...call, status: normalized } : call)),
+      );
+      setEditingStatusId(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update status.";
+      setCallRows((prev) =>
+        prev.map((call) =>
+          call.id === callId ? { ...call, status: previousStatus ?? call.status } : call,
+        ),
+      );
+      setStatusError((prev) => ({ ...prev, [callId]: message }));
+    } finally {
+      setStatusUpdating((prev) => ({ ...prev, [callId]: false }));
+    }
   };
 
   return (
@@ -64,61 +110,101 @@ export default function CallTable({ calls }: CallTableProps) {
             </TableHead>
             <TableHead>Duration</TableHead>
             <TableHead>Tags</TableHead>
-            <TableHead>Status</TableHead>
+            <TableHead>Pipeline</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sortedCalls.map((call) => (
-            <Fragment key={call.id}>
-              <TableRow
-                className="cursor-pointer"
-                onClick={() => toggleExpanded(call.id)}
-                data-state={expandedId === call.id ? "selected" : undefined}
-              >
-                <TableCell className="py-2">
-                  <div className="flex flex-col gap-1">
-                    <Link
-                      className="font-medium text-foreground hover:underline"
-                      href={`/calls/${call.id}`}
+          {sortedCalls.map((call) => {
+            const normalizedStatus = normalizePipelineStatus(call.status);
+            return (
+              <Fragment key={call.id}>
+                <TableRow
+                  className="cursor-pointer"
+                  onClick={() => toggleExpanded(call.id)}
+                  data-state={expandedId === call.id ? "selected" : undefined}
+                >
+                  <TableCell className="py-2">
+                    <div className="flex flex-col gap-1">
+                      <Link
+                        className="font-medium text-foreground hover:underline"
+                        href={`/calls/${call.id}`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {call.summary}
+                      </Link>
+                      <span className="text-xs text-muted-foreground">{call.externalNumber ?? "-"}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="py-2 text-sm text-muted-foreground">
+                    {formatDateTime(call.createdAt)}
+                  </TableCell>
+                  <TableCell className="py-2 text-sm text-muted-foreground">
+                    {formatDuration(call.durationSec)}
+                  </TableCell>
+                  <TableCell className="py-2">
+                    <div className="flex flex-wrap gap-2">
+                      {call.tags.map((tag) => (
+                        <Tag key={tag} label={tag} tone={getTagTone(tag)} />
+                      ))}
+                    </div>
+                  </TableCell>
+                  <TableCell className="py-2">
+                    <div
+                      className="flex flex-wrap items-center gap-2"
                       onClick={(event) => event.stopPropagation()}
                     >
-                      {call.summary}
-                    </Link>
-                    <span className="text-xs text-muted-foreground">{call.externalNumber ?? "-"}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="py-2 text-sm text-muted-foreground">
-                  {formatDateTime(call.createdAt)}
-                </TableCell>
-                <TableCell className="py-2 text-sm text-muted-foreground">
-                  {formatDuration(call.durationSec)}
-                </TableCell>
-                <TableCell className="py-2">
-                  <div className="flex flex-wrap gap-2">
-                    {call.tags.map((tag) => (
-                      <Tag key={tag} label={tag} tone={getTagTone(tag)} />
-                    ))}
-                  </div>
-                </TableCell>
-                <TableCell className="py-2">
-                  <Tag
-                    label={call.outcome?.status ?? "Unknown"}
-                    tone={call.outcome?.status === "lost" ? "warn" : call.outcome?.status === "potential" ? "accent" : undefined}
-                  />
-                </TableCell>
-              </TableRow>
-              {expandedId === call.id && (
-                <TableRow>
-                  <TableCell colSpan={5} className="bg-muted/40 py-4">
-                    <div className="space-y-4">
-                      <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
-                      <Transcript segments={call.transcript} />
+                      {editingStatusId === call.id ? (
+                        <select
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm"
+                          value={normalizedStatus === "UNKNOWN" ? "" : normalizedStatus}
+                          onChange={(event) => handleStatusChange(call.id, event.target.value)}
+                          disabled={statusUpdating[call.id]}
+                          onBlur={() => setEditingStatusId(null)}
+                          autoFocus
+                        >
+                          <option value="" disabled>
+                            Unknown
+                          </option>
+                          {PIPELINE_STATUS_ORDER.map((value) => (
+                            <option key={value} value={value}>
+                              {formatPipelineStatus(value)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <button
+                          type="button"
+                          className="rounded-full"
+                          onClick={() => setEditingStatusId(call.id)}
+                        >
+                          <Tag
+                            label={formatPipelineStatus(normalizedStatus)}
+                            tone={getPipelineStatusTone(normalizedStatus)}
+                          />
+                        </button>
+                      )}
+                      {statusUpdating[call.id] ? (
+                        <span className="text-xs text-muted-foreground">Updating...</span>
+                      ) : null}
+                      {statusError[call.id] ? (
+                        <span className="text-xs text-destructive">{statusError[call.id]}</span>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>
-              )}
-            </Fragment>
-          ))}
+                {expandedId === call.id && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="bg-muted/40 py-4">
+                      <div className="space-y-4">
+                        <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
+                        <Transcript segments={call.transcript} />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </Fragment>
+            );
+          })}
         </TableBody>
       </Table>
     </div>

@@ -19,9 +19,9 @@ ssh: # Required for syncing new calls
   
 whisper:
   activate: true # Performs transcription of new calls
-  device: "ayden-sn1" # Select which device_config to use
-  merge_segments_s: 2.0 # Set to null to skip segment mergeing
-  db_commit_batch_size: 1 # Process this many files before commiting to db.
+  device: "ayden-workstation" # Select which device_config to use
+  merge_segments_s: null # Set to null to skip segment mergeing
+  db_commit_batch_size: 32 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
     transcribe: true
@@ -64,11 +64,11 @@ whisper:
       num_workers: 1  # Uses all cpu cores
 
     ayden-workstation:
-      model_name: "large-v3-turbo"
+      model_name: "large-v3"
       device: "cuda"
       compute_type: "float16"
-      batch_size: 16
-      num_workers: 1  # Uses all cpu cores
+      batch_size: 8
+      num_workers: 10  # Uses all cpu cores
 
   
   # hotwords: >-
