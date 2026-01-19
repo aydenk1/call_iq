@@ -1,7 +1,7 @@
 services:
   call_iq:
     build: .
-    command: sleep infinity
+    command: /app/start_services.sh
     depends_on:
         - db
     image: call_iq:${IMAGE_TAG}
@@ -13,6 +13,7 @@ services:
     gpus: all
     ports:
      - "3000:3000"
+     - "8000:8000"
     secrets:
       - ssh_private_key
       - ssh_public_key
