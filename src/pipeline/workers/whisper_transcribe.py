@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import gc
 import json
 import logging
 import os
@@ -439,6 +440,19 @@ class WhisperTranscribe(Process):
             )
         return self._word_alignment_backend
 
+    def reset_backends(self) -> None:
+        """Best-effort cleanup so backends reload and release memory between chunks."""
+        self._whisper_backend = None
+        self._word_alignment_backend = None
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
     def stop(self, timeout: float = 60.0, terminate_timeout: float = 10.0) -> None:
         self._stop_event.set()
@@ -744,6 +758,7 @@ class WhisperTranscribe(Process):
                 logging.info(f"Finished transcription chunk in {(time.perf_counter()-st) / 60:.3} mins")
                 if completed_ids:
                     self.update_db(completed_ids)
+                self.reset_backends()
             self._stop_event.wait(self.sleep_s)
 
 
