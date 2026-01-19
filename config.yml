@@ -19,9 +19,9 @@ ssh: # Required for syncing new calls
   
 whisper:
   activate: true # Performs transcription of new calls
-  device: "ayden-workstation" # Select which device_config to use
+  device: "ayden-sn1" # Select which device_config to use
   merge_segments_s: null # Set to null to skip segment mergeing
-  db_commit_batch_size: 32 # Process this many files before commiting to db.
+  db_commit_batch_size: 4 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
     transcribe: true

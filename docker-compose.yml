@@ -1,7 +1,7 @@
 services:
   call_iq:
     build: .
-    command: /app/start_services.sh
+    command: /app/start_services.sh #sleep infinity #/app/start_services.sh
     depends_on:
         - db
     image: call_iq:${IMAGE_TAG}
