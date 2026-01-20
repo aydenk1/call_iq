@@ -130,7 +130,6 @@ def main(argv: Sequence[str]) -> int:
             log_level=log_level,
             log_dir=log_dir,
         )
-        time.sleep(3)
         downloader.start()
     
     if config["whisper"].pop("activate"):
@@ -141,7 +140,6 @@ def main(argv: Sequence[str]) -> int:
             log_level=log_level,
             log_dir=log_dir,
         )
-        time.sleep(3)
         transcriber.start()
 
     try:

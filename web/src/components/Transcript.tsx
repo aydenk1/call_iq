@@ -8,10 +8,10 @@ type TranscriptProps = {
 export default function Transcript({ segments }: TranscriptProps) {
   return (
     <div className="space-y-3">
-      {segments.map((segment) => (
+      {segments.map((segment, index) => (
         <div
           className="grid gap-3 rounded-lg border bg-muted/40 px-4 py-3 text-sm"
-          key={`${segment.speaker}-${segment.startSec}`}
+          key={`${segment.speaker}-${segment.startSec}-${segment.endSec}-${index}`}
           style={{ gridTemplateColumns: "80px 1fr" }}
         >
           <div>

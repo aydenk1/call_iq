@@ -99,6 +99,9 @@ const normalizeCallRecord = (call: ApiCallRecord): CallRecord => {
 
   const audioDuration =
     call.audio && call.audio.durationSec != null ? Number(call.audio.durationSec) : Number(call.durationSec);
+  const rawAudioUrl = typeof call.audio?.url === "string" ? call.audio.url.trim() : "";
+  const fallbackAudioUrl = `/api/audio/${encodeURIComponent(call.id)}`;
+  const audioUrl = rawAudioUrl || fallbackAudioUrl;
 
   const pipelineStatus = normalizePipelineStatus(call.status);
 
@@ -116,7 +119,7 @@ const normalizeCallRecord = (call: ApiCallRecord): CallRecord => {
     audio: {
       durationSec: Number.isFinite(audioDuration) ? audioDuration : 0,
       previewProgress: call.audio?.previewProgress != null ? Number(call.audio.previewProgress) : 0,
-      url: call.audio?.url ?? `${apiBaseUrl}/audio/${call.id}`,
+      url: audioUrl,
     },
     suggestedTasks: call.suggestedTasks ?? [],
     contactProfile: call.contactProfile ?? undefined,
@@ -157,7 +160,11 @@ export async function fetchCallRecord(callId: string): Promise<CallRecord | null
 }
 
 export async function updateCallStatus(callId: string, status: string): Promise<CallRecord> {
-  const response = await fetch(`${apiBaseUrl}/calls/${encodeURIComponent(callId)}/status`, {
+  const endpoint =
+    typeof window === "undefined"
+      ? `${apiBaseUrl}/calls/${encodeURIComponent(callId)}/status`
+      : `/api/calls/${encodeURIComponent(callId)}/status`;
+  const response = await fetch(endpoint, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
