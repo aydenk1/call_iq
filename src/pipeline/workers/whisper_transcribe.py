@@ -5,7 +5,6 @@ import gc
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from multiprocessing import Event, Process
@@ -90,6 +89,131 @@ class Transcript:
         self.segments = merged_segs
         return
     
+    def cleanup_word_timings(
+        self,
+        *,
+        max_word_duration_s: float = 1.5,
+        min_word_duration_s: float = 0.04,
+        min_gap_s: float = 0.01,
+        max_backward_s: float = 0.10,
+        first_last_duration_s: float = 0.20,
+    ) -> None:
+        for segment in self.segments:
+            if not segment.words:
+                continue
+            words = self.repair_missing_times(segment.words, min_word_duration_s=min_word_duration_s)
+            if not words:
+                segment.words = []
+                continue
+            words = self.clamp_word_duration(
+                words,
+                max_word_duration_s=max_word_duration_s,
+                min_gap_s=min_gap_s,
+                first_last_duration_s=first_last_duration_s,
+            )
+            words = self.monotonic(
+                words,
+                min_word_duration_s=min_word_duration_s,
+                min_gap_s=min_gap_s,
+                max_backward_s=max_backward_s,
+            )
+            segment.words = words
+            segment.start = words[0]["start"]
+            segment.end = words[-1]["end"]
+        self.segments = sorted(self.segments, key=lambda s: (s.start, s.end))
+
+    @staticmethod
+    def repair_missing_times(
+        words: list[dict[str, Any]],
+        *,
+        min_word_duration_s: float,
+    ) -> list[dict[str, Any]]:
+        repaired: list[dict[str, Any]] = []
+        for word in words:
+            if not isinstance(word, dict):
+                continue
+            token = str(word.get("word", "")).strip()
+            if not token:
+                continue
+            start = ConversationSegment._coerce_float(word.get("start"))
+            end = ConversationSegment._coerce_float(word.get("end"))
+            if start is None and end is None:
+                continue
+            if start is None:
+                start = max(0.0, (end or 0.0) - min_word_duration_s)
+            if end is None:
+                end = start + min_word_duration_s
+            if end < start:
+                start, end = end, start
+            fixed = dict(word)
+            fixed["word"] = token
+            fixed["start"] = max(0.0, start)
+            fixed["end"] = max(0.0, end)
+            repaired.append(fixed)
+        return repaired
+
+    @staticmethod
+    def clamp_word_duration(
+        words: list[dict[str, Any]],
+        *,
+        max_word_duration_s: float,
+        min_gap_s: float,
+        first_last_duration_s: float,
+    ) -> list[dict[str, Any]]:
+        if not words:
+            return []
+        total = len(words)
+        for idx, word in enumerate(words):
+            start = word["start"]
+            end = word["end"]
+            duration = end - start
+            prev_end = words[idx - 1]["end"] if idx > 0 else None
+            next_start = words[idx + 1]["start"] if idx + 1 < total else None
+
+            if total == 1 or (0 < idx < total - 1):
+                if duration > max_word_duration_s:
+                    mid = (start + end) / 2.0
+                    start = mid - (max_word_duration_s / 2.0)
+                    end = mid + (max_word_duration_s / 2.0)
+            elif idx == 0:
+                if duration > max_word_duration_s or (next_start is not None and end > next_start - min_gap_s):
+                    if next_start is not None:
+                        end = min(end, next_start - min_gap_s)
+                    start = max(0.0, end - first_last_duration_s)
+            else:
+                if duration > max_word_duration_s or (prev_end is not None and start < prev_end + min_gap_s):
+                    if prev_end is not None:
+                        start = max(start, prev_end + min_gap_s)
+                    end = start + first_last_duration_s
+
+            word["start"] = max(0.0, start)
+            word["end"] = max(0.0, end)
+        return words
+
+    @staticmethod
+    def monotonic(
+        words: list[dict[str, Any]],
+        *,
+        min_word_duration_s: float,
+        min_gap_s: float,
+        max_backward_s: float,
+    ) -> list[dict[str, Any]]:
+        tightened: list[dict[str, Any]] = []
+        prev_end: float | None = None
+        for word in words:
+            start = word["start"]
+            end = word["end"]
+            if prev_end is not None and start < prev_end - max_backward_s:
+                start = prev_end + min_gap_s
+            if end <= start or (end - start) < min_word_duration_s:
+                end = start + min_word_duration_s
+            fixed = dict(word)
+            fixed["start"] = max(0.0, start)
+            fixed["end"] = max(0.0, end)
+            tightened.append(fixed)
+            prev_end = fixed["end"]
+        return tightened
+
     @staticmethod
     def merge_transcripts(transcript_1: Transcript, transcript_2: Transcript, merge_threshold_s: float | None = None) -> Transcript:
         if transcript_1.call_uuid != transcript_2.call_uuid:
@@ -100,6 +224,9 @@ class Transcript:
         if merge_threshold_s is not None:
             transcript_1.merge_segments(merge_threshold_s)
             transcript_2.merge_segments(merge_threshold_s)
+
+        transcript_1.cleanup_word_timings()
+        transcript_2.cleanup_word_timings()
 
         merged_conversation = sorted(
             [*transcript_1.segments, *transcript_2.segments],
@@ -178,150 +305,6 @@ class ConversationSegment:
             return [word for word in value if isinstance(word, dict)]
         return []
 
-    def to_word_utterances(
-        self,
-        *,
-        max_gap_s: float = 0.8,
-        max_word_duration_s: float = 1.2,
-        min_word_duration_s: float = 0.04,
-        min_gap_s: float = 0.02,
-        max_words_per_utterance: int = 24,
-    ) -> list[dict[str, Any]]:
-        if not self.words:
-            return [
-                {
-                    "speaker": self.speaker,
-                    "start": self.start,
-                    "end": self.end,
-                    "text": self.text.strip(),
-                    "words": [],
-                }
-            ]
-
-        tightened_words = self._tighten_words(
-            self.words,
-            max_word_duration_s=max_word_duration_s,
-            min_word_duration_s=min_word_duration_s,
-            min_gap_s=min_gap_s,
-        )
-        if not tightened_words:
-            return [
-                {
-                    "speaker": self.speaker,
-                    "start": self.start,
-                    "end": self.end,
-                    "text": self.text.strip(),
-                    "words": [],
-                }
-            ]
-
-        utterances: list[dict[str, Any]] = []
-        current_words: list[dict[str, Any]] = []
-        last_end: float | None = None
-        for word in tightened_words:
-            if current_words and last_end is not None:
-                gap = word["start"] - last_end
-                if gap > max_gap_s or len(current_words) >= max_words_per_utterance:
-                    utterances.append(self._words_to_utterance(current_words))
-                    current_words = []
-            if not current_words:
-                last_end = None
-            current_words.append(word)
-            last_end = word["end"]
-        if current_words:
-            utterances.append(self._words_to_utterance(current_words))
-        return utterances
-
-    def _words_to_utterance(self, words: list[dict[str, Any]]) -> dict[str, Any]:
-        text = self._join_words([word["word"] for word in words])
-        return {
-            "speaker": self.speaker,
-            "start": words[0]["start"],
-            "end": words[-1]["end"],
-            "text": text,
-            "words": words,
-        }
-
-    @staticmethod
-    def _join_words(words: list[str]) -> str:
-        text = " ".join(word for word in words if word).strip()
-        text = re.sub(r"\s+([,.;:!?%])", r"\1", text)
-        text = re.sub(r"\s+('(?:[A-Za-z]+))", r"\1", text)
-        return text
-
-    @staticmethod
-    def _tighten_words(
-        words: list[dict[str, Any]],
-        *,
-        max_word_duration_s: float,
-        min_word_duration_s: float,
-        min_gap_s: float,
-    ) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        for word in words:
-            if not isinstance(word, dict):
-                continue
-            token = str(word.get("word", "")).strip()
-            if not token:
-                continue
-            start = ConversationSegment._coerce_float(word.get("start"))
-            end = ConversationSegment._coerce_float(word.get("end"))
-            if start is None and end is None:
-                continue
-            if start is None:
-                start = max(0.0, (end or 0.0) - min_word_duration_s)
-            if end is None:
-                end = start + min_word_duration_s
-            if end < start:
-                start, end = end, start
-            normalized.append(
-                {
-                    "word": token,
-                    "start": max(0.0, start),
-                    "end": max(0.0, end),
-                    "score": word.get("score"),
-                }
-            )
-
-        if not normalized:
-            return []
-
-        normalized.sort(key=lambda item: (item["start"], item["end"]))
-        tightened: list[dict[str, Any]] = []
-        for idx, word in enumerate(normalized):
-            start = word["start"]
-            end = word["end"]
-
-            if end - start > max_word_duration_s:
-                end = start + max_word_duration_s
-            if end - start < min_word_duration_s:
-                end = start + min_word_duration_s
-
-            if tightened:
-                prev_end = tightened[-1]["end"]
-                if start < prev_end + min_gap_s:
-                    start = prev_end + min_gap_s
-                    if end < start + min_word_duration_s:
-                        end = start + min_word_duration_s
-
-            next_start = None
-            if idx + 1 < len(normalized):
-                next_start = normalized[idx + 1]["start"]
-            if next_start is not None and next_start > start:
-                end = min(end, next_start - min_gap_s)
-                if end < start + min_word_duration_s:
-                    end = start + min_word_duration_s
-
-            tightened.append(
-                {
-                    "word": word["word"],
-                    "start": start,
-                    "end": end,
-                    "score": word.get("score"),
-                }
-            )
-        return tightened
-
     @staticmethod
     def _coerce_float(value: Any) -> float | None:
         try:
@@ -346,6 +329,7 @@ class WhisperTranscribe(Process):
         alignment_model_kwargs: dict[str, Any],
         whisper_backend: str = "faster-whisper",
         alignment_backend: str = "whisperx-alignment",
+        low_mem: bool = False,
         sleep_s: float = 60,
         db_commit_batch_size: int = 64,
         log_level: int | None = None,
@@ -377,6 +361,8 @@ class WhisperTranscribe(Process):
         self.activate_word_alignment: bool = True if len(alignment_backend) else False
         self.alignment_model_kwargs: dict[str, Any] = alignment_model_kwargs
         self.alignment_backend_name: str = alignment_backend
+
+        self.low_mem = low_mem
 
         self.sleep_s: float = sleep_s
         self.db_commit_batch_size: int = db_commit_batch_size
@@ -527,12 +513,12 @@ class WhisperTranscribe(Process):
         """Build the ffmpeg command that normalizes and splits stereo audio."""
         fc = (
             "[0:a]channelsplit=channel_layout=stereo[left][right];"
-            "[left]highpass=f=120,lowpass=f=7500,"
-            "agate=threshold=0.01:ratio=10:attack=10:release=250,"
+            "[left]highpass=f=100,lowpass=f=10000,"
+            #"agate=threshold=0.01:ratio=10:attack=10:release=250,"
             #"loudnorm=I=-18:TP=-2:LRA=11,"
             "aresample=16000,pan=mono|c0=c0[left_m];"
-            "[right]highpass=f=120,lowpass=f=7500,"
-            "agate=threshold=0.01:ratio=10:attack=10:release=250,"
+            "[right]highpass=f=100,lowpass=f=10000,"
+            #"agate=threshold=0.01:ratio=10:attack=10:release=250,"
             #"loudnorm=I=-18:TP=-2:LRA=11,"
             "aresample=16000,pan=mono|c0=c0[right_m]"
         )
@@ -615,7 +601,8 @@ class WhisperTranscribe(Process):
                 results.append(result)
                 pbar.update(1)
                 
-
+        if self.low_mem:
+            self.reset_backends()
         if self.activate_word_alignment:
             aligned_results: list[TranscriptionResult] = []
             with tqdm(total=len(targets), desc="Aligning Word Timestamps", unit="file") as pbar:

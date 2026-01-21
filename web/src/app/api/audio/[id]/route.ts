@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import type { Readable } from "node:stream";
 
 export const runtime = "nodejs";
 
@@ -10,6 +10,41 @@ const SUPPORTED_CHANNELS = new Set(["customer", "store"]);
 type AudioTarget = {
   path: string;
   contentType: string;
+};
+
+const nodeStreamToReadableStream = (stream: Readable): ReadableStream => {
+  let isClosed = false;
+
+  return new ReadableStream({
+    start(controller) {
+      stream.on("data", (chunk) => {
+        if (isClosed) {
+          return;
+        }
+        controller.enqueue(chunk);
+      });
+      stream.on("end", () => {
+        if (isClosed) {
+          return;
+        }
+        isClosed = true;
+        controller.close();
+      });
+      stream.on("error", (error) => {
+        if (isClosed) {
+          return;
+        }
+        isClosed = true;
+        controller.error(error);
+      });
+    },
+    cancel() {
+      if (!isClosed) {
+        isClosed = true;
+        stream.destroy();
+      }
+    },
+  });
 };
 
 function parseRange(rangeHeader: string | null, size: number) {
@@ -83,9 +118,7 @@ export async function GET(
       headers.set("Content-Range", `bytes ${range.start}-${range.end}/${info.size}`);
       headers.set("Content-Length", String(range.end - range.start + 1));
       const stream = createReadStream(target.path, { start: range.start, end: range.end });
-      const body = (typeof Readable.toWeb === "function"
-        ? Readable.toWeb(stream)
-        : (stream as unknown as ReadableStream)) as ReadableStream;
+      const body = nodeStreamToReadableStream(stream);
       return new Response(body, {
         status: 206,
         headers,
@@ -94,9 +127,7 @@ export async function GET(
 
     headers.set("Content-Length", String(info.size));
     const stream = createReadStream(target.path);
-    const body = (typeof Readable.toWeb === "function"
-      ? Readable.toWeb(stream)
-      : (stream as unknown as ReadableStream)) as ReadableStream;
+    const body = nodeStreamToReadableStream(stream);
     return new Response(body, {
       status: 200,
       headers,
