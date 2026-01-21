@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import AudioScrub from "@/components/AudioScrub";
 import Tag from "@/components/Tag";
@@ -31,6 +31,51 @@ type SortDirection = "asc" | "desc";
 type CallTableProps = {
   calls: CallRecord[];
 };
+
+type ExpandedCallDetailsProps = {
+  call: CallRecord;
+};
+
+function ExpandedCallDetails({ call }: ExpandedCallDetailsProps) {
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [seekToSec, setSeekToSec] = useState<number | null>(null);
+  const linkedCallCount = call.contactProfile?.previousCallIds.length ?? 0;
+
+  const handleTimeUpdate = useCallback((nextTime: number) => {
+    setCurrentTimeSec(nextTime);
+  }, []);
+
+  const handlePlayState = useCallback((nextPlaying: boolean) => {
+    setIsPlaying(nextPlaying);
+  }, []);
+
+  const handleSeek = useCallback((startSec: number) => {
+    setSeekToSec(startSec);
+    setCurrentTimeSec(startSec);
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <AudioScrub
+        src={call.audio.url}
+        durationSec={call.audio.durationSec}
+        onTimeUpdate={handleTimeUpdate}
+        onPlayStateChange={handlePlayState}
+        seekToSec={seekToSec}
+        onSeekApplied={() => setSeekToSec(null)}
+      />
+      <Transcript
+        segments={call.transcript}
+        minRows={linkedCallCount}
+        currentTimeSec={currentTimeSec}
+        autoScroll={isPlaying}
+        scrollBehavior={isPlaying ? "smooth" : "auto"}
+        onSeek={handleSeek}
+      />
+    </div>
+  );
+}
 
 export default function CallTable({ calls }: CallTableProps) {
   const [callRows, setCallRows] = useState<CallRecord[]>(calls);
@@ -195,10 +240,7 @@ export default function CallTable({ calls }: CallTableProps) {
                 {expandedId === call.id && (
                   <TableRow>
                     <TableCell colSpan={5} className="bg-muted/40 py-4">
-                      <div className="space-y-4">
-                        <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
-                        <Transcript segments={call.transcript} />
-                      </div>
+                      <ExpandedCallDetails call={call} />
                     </TableCell>
                   </TableRow>
                 )}

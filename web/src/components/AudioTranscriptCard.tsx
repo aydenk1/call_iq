@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import AudioScrub from "@/components/AudioScrub";
 import Transcript from "@/components/Transcript";
@@ -45,6 +45,9 @@ export default function AudioTranscriptCard({
     }
     return runs[runs.length - 1].id;
   });
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [seekToSec, setSeekToSec] = useState<number | null>(null);
 
   useEffect(() => {
     if (runs.length === 0) {
@@ -70,6 +73,19 @@ export default function AudioTranscriptCard({
     const latestLabel = runs[latestIndex]?.label ?? `Run ${runs.length}`;
     return `Latest (${latestLabel})`;
   }, [runs]);
+
+  const handleTimeUpdate = useCallback((nextTime: number) => {
+    setCurrentTimeSec(nextTime);
+  }, []);
+
+  const handlePlayState = useCallback((nextPlaying: boolean) => {
+    setIsPlaying(nextPlaying);
+  }, []);
+
+  const handleSeek = useCallback((startSec: number) => {
+    setSeekToSec(startSec);
+    setCurrentTimeSec(startSec);
+  }, []);
 
   return (
     <Card>
@@ -107,9 +123,24 @@ export default function AudioTranscriptCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <AudioScrub src={audioUrl} durationSec={audioDurationSec} />
+        <AudioScrub
+          src={audioUrl}
+          durationSec={audioDurationSec}
+          onTimeUpdate={handleTimeUpdate}
+          onPlayStateChange={handlePlayState}
+          seekToSec={seekToSec}
+          onSeekApplied={() => setSeekToSec(null)}
+        />
         {selectedRun ? (
-          <Transcript segments={selectedRun.segments} minRows={minRows} />
+          <Transcript
+            segments={selectedRun.segments}
+            minRows={minRows}
+            currentTimeSec={currentTimeSec}
+            autoScroll={isPlaying}
+            scrollBehavior={isPlaying ? "smooth" : "auto"}
+            maxHeight="50vh"
+            onSeek={handleSeek}
+          />
         ) : (
           <div className="rounded-lg border border-dashed border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
             Transcript unavailable.

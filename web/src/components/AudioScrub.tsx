@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatDuration } from "@/lib/format";
 
@@ -8,9 +8,21 @@ type AudioScrubProps = {
   src?: string;
   durationSec: number;
   label?: string;
+  onTimeUpdate?: (currentSec: number) => void;
+  onPlayStateChange?: (isPlaying: boolean) => void;
+  seekToSec?: number | null;
+  onSeekApplied?: (currentSec: number) => void;
 };
 
-export default function AudioScrub({ src, durationSec, label }: AudioScrubProps) {
+export default function AudioScrub({
+  src,
+  durationSec,
+  label,
+  onTimeUpdate,
+  onPlayStateChange,
+  seekToSec,
+  onSeekApplied,
+}: AudioScrubProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentSec, setCurrentSec] = useState(0);
   const [audioDuration, setAudioDuration] = useState(durationSec);
@@ -22,11 +34,31 @@ export default function AudioScrub({ src, durationSec, label }: AudioScrubProps)
     }
   }, []);
 
+  useEffect(() => {
+    if (!audioRef.current) {
+      return;
+    }
+    if (!Number.isFinite(seekToSec)) {
+      return;
+    }
+    const target = Number(seekToSec);
+    if (Math.abs(audioRef.current.currentTime - target) < 0.05) {
+      onSeekApplied?.(target);
+      return;
+    }
+    audioRef.current.currentTime = target;
+    setCurrentSec(target);
+    onTimeUpdate?.(target);
+    onSeekApplied?.(target);
+  }, [seekToSec, onSeekApplied, onTimeUpdate]);
+
   const handleTimeUpdate = useCallback(() => {
     if (audioRef.current) {
-      setCurrentSec(audioRef.current.currentTime);
+      const nextTime = audioRef.current.currentTime;
+      setCurrentSec(nextTime);
+      onTimeUpdate?.(nextTime);
     }
-  }, []);
+  }, [onTimeUpdate]);
 
   const handlePlayPause = useCallback(() => {
     if (!audioRef.current) {
@@ -47,8 +79,9 @@ export default function AudioScrub({ src, durationSec, label }: AudioScrubProps)
       const target = (value / 100) * audioDuration;
       audioRef.current.currentTime = target;
       setCurrentSec(target);
+      onTimeUpdate?.(target);
     },
-    [audioDuration],
+    [audioDuration, onTimeUpdate],
   );
 
   const percent = useMemo(() => {
@@ -99,8 +132,14 @@ export default function AudioScrub({ src, durationSec, label }: AudioScrubProps)
         src={src}
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          setIsPlaying(true);
+          onPlayStateChange?.(true);
+        }}
+        onPause={() => {
+          setIsPlaying(false);
+          onPlayStateChange?.(false);
+        }}
       >
         Your browser does not support the audio element.
       </audio>
