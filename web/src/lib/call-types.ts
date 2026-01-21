@@ -5,6 +5,13 @@ export type TranscriptSegment = {
   text: string;
 };
 
+export type TranscriptRun = {
+  id: string;
+  label: string;
+  segments: TranscriptSegment[];
+  text: string;
+};
+
 export type CallOutcome = {
   status: "potential" | "lost" | "neutral";
   amount?: string;
@@ -30,6 +37,7 @@ export type CallRecord = {
   tags: string[];
   outcome?: CallOutcome;
   transcript: TranscriptSegment[];
+  transcripts: TranscriptRun[];
   audio: {
     durationSec: number;
     previewProgress: number;
