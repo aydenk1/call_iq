@@ -14,13 +14,15 @@ unifi_ingestion: # Ingests call log data from UniFi call logs
   
 ssh: # Required for syncing new calls
   activate: true # Use true to skip downloading of new calls
+  sleep_s: 5
   remote_host: "unifi-router"
   remote_path: "/volume1/.srv/unifi-talk/recordings"
   
 whisper:
   activate: true # Performs transcription of new calls
+  sleep_s: 5
   device: "ayden-sn1" # Select which device_config to use
-  low_mem: true
+  low_mem: false
   merge_segments_s: null # Set to null to skip segment mergeing
   db_commit_batch_size: 4 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
@@ -61,7 +63,7 @@ whisper:
     ayden-sn1:
       model_name: "large-v3"
       device: "cuda"
-      compute_type: "float32"
+      compute_type: "int8_float32"
       batch_size: 1
       num_workers: 1  # Uses all cpu cores
 

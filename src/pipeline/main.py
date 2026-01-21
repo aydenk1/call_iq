@@ -127,6 +127,7 @@ def main(argv: Sequence[str]) -> int:
             remote_host=config["ssh"]["remote_host"],
             remote_dir=config["ssh"]["remote_path"],
             local_dir=recording_dir,
+            sleep_s=config["ssh"]["sleep_s"],
             log_level=log_level,
             log_dir=log_dir,
         )
