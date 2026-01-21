@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import AudioScrub from "@/components/AudioScrub";
+import AudioTranscriptCard from "@/components/AudioTranscriptCard";
 import Tag from "@/components/Tag";
-import Transcript from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,6 +30,7 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
   const relatedCalls = call.contactProfile?.previousCallIds
     .map((id) => callRecords.find((entry) => entry.id === id))
     .filter((entry): entry is (typeof callRecords)[number] => Boolean(entry));
+  const linkedCallCount = relatedCalls?.length ?? 0;
 
   return (
     <main className="container space-y-8 py-10">
@@ -65,15 +65,13 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
 
       <section className="grid gap-8 lg:grid-cols-[2fr_1fr]">
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Audio scrub and transcript</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <AudioScrub src={call.audio.url} durationSec={call.audio.durationSec} />
-              <Transcript segments={call.transcript} />
-            </CardContent>
-          </Card>
+          <AudioTranscriptCard
+            audioUrl={call.audio.url}
+            audioDurationSec={call.audio.durationSec}
+            transcripts={call.transcripts}
+            fallbackSegments={call.transcript}
+            minRows={linkedCallCount}
+          />
 
           <Card>
             <CardHeader>

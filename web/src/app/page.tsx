@@ -1,16 +1,34 @@
+import Link from "next/link";
+
 import CallTable from "@/components/CallTable";
 import RefreshOnReturn from "@/components/RefreshOnReturn";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchCallRecords } from "@/lib/calls";
+import { fetchCallRecordsPage } from "@/lib/calls";
 import { formatDateTime, formatDuration } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function HomePage() {
-  const callRecords = await fetchCallRecords();
+type HomePageProps = {
+  searchParams?: Promise<{ page?: string }>;
+};
+
+const PAGE_SIZE = 25;
+
+export default async function HomePage({ searchParams }: HomePageProps) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const pageRaw = resolvedParams?.page ?? "1";
+  const pageNumber = Number(pageRaw);
+  const currentPage = Number.isFinite(pageNumber) && pageNumber > 0 ? Math.floor(pageNumber) : 1;
+  const offset = (currentPage - 1) * PAGE_SIZE;
+  const { records: callRecords, hasMore } = await fetchCallRecordsPage({
+    limit: PAGE_SIZE,
+    offset,
+  });
   const totalDuration = callRecords.reduce((total, call) => total + call.durationSec, 0);
   const latestCall = callRecords[0];
+  const prevPage = currentPage > 1 ? currentPage - 1 : null;
+  const nextPage = hasMore ? currentPage + 1 : null;
 
   return (
     <main className="container space-y-10 py-10">
@@ -30,7 +48,7 @@ export default async function HomePage() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Calls tracked</span>
+                <span className="text-muted-foreground">Calls loaded</span>
                 <span className="text-base font-semibold text-foreground">{callRecords.length}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -65,6 +83,32 @@ export default async function HomePage() {
         </div>
 
         <CallTable calls={callRecords} />
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            Page {currentPage}
+          </span>
+          <div className="flex items-center gap-2">
+            {prevPage ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={prevPage === 1 ? "/" : `/?page=${prevPage}`}>Previous</Link>
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled>
+                Previous
+              </Button>
+            )}
+            {nextPage ? (
+              <Button asChild size="sm" variant="outline">
+                <Link href={`/?page=${nextPage}`}>Next</Link>
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled>
+                Next
+              </Button>
+            )}
+          </div>
+        </div>
       </section>
     </main>
   );
