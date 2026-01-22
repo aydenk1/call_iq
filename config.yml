@@ -23,7 +23,7 @@ whisper:
   sleep_s: 5
   device: "ayden-sn1" # Select which device_config to use
   low_mem: false
-  merge_segments_s: .5 # Set to null to skip segment mergeing
+  merge_segments_s: null # Set to null to skip segment mergeing
   db_commit_batch_size: 4 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
