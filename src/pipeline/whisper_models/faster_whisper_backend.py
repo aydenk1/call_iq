@@ -21,15 +21,41 @@ class FasterWhisperBackend(WhisperBackend):
         device: str,
         compute_type: str,
         num_workers: int,
+        batch_size: int,
         model_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.model_name = model_name
         self.device = self._resolve_device(device)
         self.compute_type = compute_type
         self.num_workers = num_workers
-        self.model_kwargs = model_kwargs if model_kwargs is not None else {}
+        self.batch_size = batch_size
+        model_init_kwargs, transcribe_kwargs = self._split_model_kwargs(model_kwargs or {})
+        self.model_init_kwargs = model_init_kwargs
+        self.model_kwargs = transcribe_kwargs
         self._model: WhisperModel | None = None
         self._pipeline: BatchedInferencePipeline | None = None
+
+    @staticmethod
+    def _split_model_kwargs(
+        kwargs: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        model_init_keys = {
+            "device_index",
+            "download_root",
+            "local_files_only",
+            "files",
+            "cpu_threads",
+            "num_workers",
+        }
+        model_init_kwargs: dict[str, Any] = {}
+        transcribe_kwargs: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in model_init_keys:
+                model_init_kwargs[key] = value
+            else:
+                transcribe_kwargs[key] = value
+        transcribe_kwargs.pop("batch_size", None)
+        return model_init_kwargs, transcribe_kwargs
 
     @staticmethod
     def _resolve_device(device: str) -> str:
@@ -54,12 +80,15 @@ class FasterWhisperBackend(WhisperBackend):
                 self.compute_type,
                 self.num_workers,
             )
+            model_kwargs = dict(self.model_init_kwargs)
+            num_workers = model_kwargs.pop("num_workers", self.num_workers)
             self._model = WhisperModel(
                 self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
-                num_workers=self.num_workers,
-                cpu_threads=self.num_workers,
+                num_workers=num_workers,
+                cpu_threads=num_workers,
+                **model_kwargs,
             )
             self._pipeline = None
         return self._model
@@ -73,13 +102,11 @@ class FasterWhisperBackend(WhisperBackend):
     def transcribe(
         self,
         audio_path: Path,
-        batch_size: int,
-        **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], TranscriptionInfo]:
         pipeline = self._load_pipeline()
         segments_iter, info = pipeline.transcribe(
             str(audio_path),
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             **self.model_kwargs,
         )
         segments = [asdict(seg) for seg in segments_iter]
@@ -93,8 +120,6 @@ class FasterWhisperBackend(WhisperBackend):
     def __call__(
         self,
         audio_paths: list[Path],
-        batch_size: int,
-        **kwargs: Any,
     ) -> Iterable[TranscriptionResult]:
         if not audio_paths:
             return
@@ -103,7 +128,7 @@ class FasterWhisperBackend(WhisperBackend):
         max_workers = max(1, self.num_workers // 2)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_audio = {
-                executor.submit(self.transcribe, audio_path, batch_size, **kwargs): audio_path
+                executor.submit(self.transcribe, audio_path): audio_path
                 for audio_path in audio_paths
             }
         

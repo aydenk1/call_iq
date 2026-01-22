@@ -30,13 +30,13 @@ class WhisperBackend:
             device: str,
             compute_type: str,
             num_workers: int,
+            batch_size: int,
             model_kwargs: dict[str, Any] | None = None,
     ) -> None:
         ...
         
     def __call__(
         self,
-        *args,
-        **kwargs: Any,
+        targets,
     ) -> Iterable[TranscriptionResult]:
         ...

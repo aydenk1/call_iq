@@ -409,6 +409,7 @@ class WhisperTranscribe(Process):
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
+                batch_size=self.batch_size,
                 model_kwargs=self.whisper_model_kwargs,
             )
         return self._whisper_backend
@@ -422,6 +423,7 @@ class WhisperTranscribe(Process):
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
+                batch_size=self.batch_size,
                 model_kwargs=self.alignment_model_kwargs,
             )
         return self._word_alignment_backend
@@ -595,8 +597,7 @@ class WhisperTranscribe(Process):
         results: list[TranscriptionResult] = []
         with tqdm(total=len(targets), desc="Transcribing", unit="file") as pbar:
             for result in self.whisper_backend(
-                targets,
-                batch_size=self.batch_size,
+                targets
             ):
                 results.append(result)
                 pbar.update(1)

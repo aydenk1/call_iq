@@ -15,6 +15,7 @@ def create_backend(
     device: str,
     compute_type: str,
     num_workers: int,
+    batch_size: int,
     model_kwargs: dict[str, Any] | None = None,
 ) -> WhisperBackend:
     key = backend_name.strip().lower()
@@ -25,6 +26,7 @@ def create_backend(
                 device=device,
                 compute_type=compute_type,
                 num_workers=num_workers,
+                batch_size=batch_size,
                 model_kwargs=model_kwargs
             )
     raise ValueError(f"Unknown whisper backend: {backend_name}")

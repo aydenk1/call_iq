@@ -30,7 +30,10 @@ def _init_worker(model_name: str, device: str) -> None:
     _MODEL = OpenAIWhisperBackend._load_model(_MODEL_NAME, _MODEL_DEVICE)
     
 
-def _transcribe_worker(audio_paths: list[Path], kwargs: dict[str, Any]) -> tuple[list[list[dict[str, Any]]], list[TranscriptionInfo]]:
+def _transcribe_worker(
+    audio_paths: list[Path],
+    **kwargs: Any,
+) -> tuple[list[list[dict[str, Any]]], list[TranscriptionInfo]]:
     if _MODEL is None:
         if _MODEL_NAME is None or _MODEL_DEVICE is None:
             raise RuntimeError("Worker model not initialized.")
@@ -79,16 +82,27 @@ class OpenAIWhisperBackend(WhisperBackend):
         device: str,
         compute_type: str,
         num_workers: int,
+        batch_size: int,
         model_kwargs: dict[str, Any] | None = None,
     ) -> None:
+        if compute_type not in {"float16", "float32"}:
+            raise ValueError(
+                "openai-whisper backend only supports compute_type "
+                "'float16' or 'float32'."
+            )
         self.model_name = model_name
         self.device = self._resolve_device(device)
+        self.compute_type = compute_type
         self.num_workers = num_workers
+        self.batch_size = batch_size
         self._model = None
-        self.model_kwargs = dict(model_kwargs or {})
+        self.model_kwargs = self.convert_kwarg(dict(model_kwargs or {}), self.compute_type)
 
     @staticmethod
-    def convert_kwarg(**kwargs) -> dict:
+    def convert_kwarg(
+        kwargs: dict[str, Any],
+        compute_type: str | None = None,
+    ) -> dict[str, Any]:
         new_kwargs = {}
         for k, v in kwargs.items():
             if k == "log_prob_threshold":
@@ -96,9 +110,17 @@ class OpenAIWhisperBackend(WhisperBackend):
             if k == "log_progress":
                 k = "verbose"
                 v = True if v == True else None
+            if k == "batch_size":
+                continue
+            if k == "vad_filter":
+                continue
             if k == "vad_parameters":
                 continue
             new_kwargs[k] = v
+        if compute_type == "float16":
+            new_kwargs["fp16"] = True
+        else:
+            new_kwargs["fp16"] = False
         return new_kwargs
 
     @staticmethod
@@ -150,10 +172,8 @@ class OpenAIWhisperBackend(WhisperBackend):
     def transcribe(
         self,
         audio_path: Path,
-        batch_size: int,
-        **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], TranscriptionInfo]:
-        result = self.model.transcribe(str(audio_path), **kwargs)
+        result = self.model.transcribe(str(audio_path), **self.model_kwargs)
         raw_segments = result.get("segments", [])
         segments: list[dict[str, Any]] = []
         for idx, seg in enumerate(raw_segments):
@@ -185,19 +205,14 @@ class OpenAIWhisperBackend(WhisperBackend):
     def __call__(
         self,
         audio_paths: list[Path],
-        batch_size: int,
-        **kwargs: Any,
     ) -> Iterable[TranscriptionResult]:
         if not audio_paths:
             return
-        call_kwargs = dict(self.model_kwargs)
-        call_kwargs.update(kwargs)
-        call_kwargs = self.convert_kwarg(**call_kwargs)
-
+        
         if self.num_workers <= 1:
             for audio_path in audio_paths:
                 try:
-                    segments, info = self.transcribe(audio_path, batch_size, **call_kwargs)
+                    segments, info = self.transcribe(audio_path)
                 except Exception as exc:
                     yield TranscriptionResult(
                         audio_path=audio_path,
@@ -224,7 +239,7 @@ class OpenAIWhisperBackend(WhisperBackend):
             initargs=(self.model_name, self.device),
         ) as executor:
             future_to_audio = {
-                executor.submit(_transcribe_worker, batch, call_kwargs): batch
+                executor.submit(_transcribe_worker, batch, **self.model_kwargs): batch
                 for batch in batches
             }
             for future in as_completed(future_to_audio):

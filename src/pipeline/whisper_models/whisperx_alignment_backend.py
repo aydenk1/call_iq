@@ -17,12 +17,14 @@ class WhisperXAlignmentBackend(WhisperBackend):
         compute_type: str,
         model_name: str,
         num_workers: int,
+        batch_size: int,
         model_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.device = device
         self.compute_type = compute_type
         self.model_name = model_name
         self.num_workers = num_workers
+        self.batch_size = batch_size
         self.model_kwargs = dict(model_kwargs or {})
         self.language: str = self.model_kwargs.get("language", "en")
         self.return_char_alignments: bool = self.model_kwargs.get("return_char_alignments", False)

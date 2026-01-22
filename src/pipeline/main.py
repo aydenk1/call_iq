@@ -108,7 +108,7 @@ def main(argv: Sequence[str]) -> int:
         unifi_client = UniFiOSClient(
             base_url=config["unifi_ingestion"]["base_url"],
             username=os.getenv("UNIFI_USERNAME", ""),
-            password=os.getenv("UNIFI_PASSWORD", "")
+            password=os.getenv("UNIFI_PASSWORD", "").replace("$$", "$")
             )
         unifi_ingestion = UniFiCallIngestion(
             unifi_client=unifi_client,
