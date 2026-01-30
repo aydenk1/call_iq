@@ -97,13 +97,19 @@ class Transcript:
         min_gap_s: float = 0.01,
         max_backward_s: float = 0.10,
         first_last_duration_s: float = 0.20,
+        anchor_score_floor: float = 0.25,
+        clump_split_gap_s: float = 2.0,
+        boundary_gap_s: float = 1.0,
     ) -> None:
+        updated_segments: list[ConversationSegment] = []
         for segment in self.segments:
             if not segment.words:
+                updated_segments.append(segment)
                 continue
             words = self.repair_missing_times(segment.words, min_word_duration_s=min_word_duration_s)
             if not words:
                 segment.words = []
+                updated_segments.append(segment)
                 continue
             words = self.clamp_word_duration(
                 words,
@@ -117,10 +123,46 @@ class Transcript:
                 min_gap_s=min_gap_s,
                 max_backward_s=max_backward_s,
             )
-            segment.words = words
-            segment.start = words[0]["start"]
-            segment.end = words[-1]["end"]
-        self.segments = sorted(self.segments, key=lambda s: (s.start, s.end))
+            clumps = self.clump_ranges(words, split_gap_s=clump_split_gap_s, anchor_floor=anchor_score_floor)
+            for start_idx, end_idx in clumps:
+                self.tighten_clump_boundaries(
+                    words,
+                    start_idx,
+                    end_idx,
+                    min_gap_s=min_gap_s,
+                    min_word_duration_s=min_word_duration_s,
+                    boundary_gap_s=boundary_gap_s,
+                    boundary_score_floor=anchor_score_floor,
+                )
+            words = self.monotonic(
+                words,
+                min_word_duration_s=min_word_duration_s,
+                min_gap_s=min_gap_s,
+                max_backward_s=max_backward_s,
+            )
+            if len(clumps) <= 1:
+                segment.words = words
+                segment.start = words[0]["start"]
+                segment.end = words[-1]["end"]
+                updated_segments.append(segment)
+                continue
+            for start_idx, end_idx in clumps:
+                clump_words = words[start_idx:end_idx]
+                if not clump_words:
+                    continue
+                clump_text = " ".join(word["word"] for word in clump_words).strip()
+                updated_segments.append(
+                    ConversationSegment(
+                        speaker=segment.speaker,
+                        text=clump_text,
+                        start=clump_words[0]["start"],
+                        end=clump_words[-1]["end"],
+                        avg_logprob=segment.avg_logprob,
+                        compression_ratio=segment.compression_ratio,
+                        words=clump_words,
+                    )
+                )
+        self.segments = sorted(updated_segments, key=lambda s: (s.start, s.end))
 
     @staticmethod
     def repair_missing_times(
@@ -213,6 +255,69 @@ class Transcript:
             tightened.append(fixed)
             prev_end = fixed["end"]
         return tightened
+
+    @staticmethod
+    def anchor_indices(words: list[dict[str, Any]], *, anchor_floor: float) -> list[int]:
+        idx = [
+            i
+            for i, word in enumerate(words)
+            if float(word.get("score", 1.0) or 0.0) >= anchor_floor
+        ]
+        return idx if len(idx) >= 2 else list(range(len(words)))
+
+    @staticmethod
+    def clump_ranges(
+        words: list[dict[str, Any]],
+        *,
+        split_gap_s: float,
+        anchor_floor: float,
+    ) -> list[tuple[int, int]]:
+        if not words:
+            return []
+        anchor_idx = Transcript.anchor_indices(words, anchor_floor=anchor_floor)
+        split_points = [0]
+        for left, right in zip(anchor_idx, anchor_idx[1:]):
+            gap = float(words[right]["start"]) - float(words[left]["end"])
+            if gap > split_gap_s:
+                split_points.append(right)
+        split_points.append(len(words))
+        return list(zip(split_points, split_points[1:]))
+
+    @staticmethod
+    def tighten_clump_boundaries(
+        words: list[dict[str, Any]],
+        start_idx: int,
+        end_idx: int,
+        *,
+        min_gap_s: float,
+        min_word_duration_s: float,
+        boundary_gap_s: float,
+        boundary_score_floor: float,
+    ) -> None:
+        if end_idx - start_idx < 2:
+            return
+
+        def score(idx: int) -> float:
+            return float(words[idx].get("score", 1.0) or 0.0)
+
+        first_idx = start_idx
+        second_idx = start_idx + 1
+        last_idx = end_idx - 1
+        prev_idx = end_idx - 2
+
+        gap_first = float(words[second_idx]["start"]) - float(words[first_idx]["end"])
+        if gap_first > boundary_gap_s and score(first_idx) < boundary_score_floor:
+            new_end = float(words[second_idx]["start"]) - min_gap_s
+            new_end = max(new_end, float(words[first_idx]["start"]) + min_word_duration_s)
+            words[first_idx]["end"] = new_end
+            words[first_idx]["start"] = min(float(words[first_idx]["start"]), new_end - min_word_duration_s)
+
+        gap_last = float(words[last_idx]["start"]) - float(words[prev_idx]["end"])
+        if gap_last > boundary_gap_s and score(last_idx) < boundary_score_floor:
+            new_start = float(words[prev_idx]["end"]) + min_gap_s
+            new_start = min(new_start, float(words[last_idx]["end"]) - min_word_duration_s)
+            words[last_idx]["start"] = new_start
+            words[last_idx]["end"] = max(float(words[last_idx]["end"]), new_start + min_word_duration_s)
 
     @staticmethod
     def merge_transcripts(transcript_1: Transcript, transcript_2: Transcript, merge_threshold_s: float | None = None) -> Transcript:
