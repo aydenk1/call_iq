@@ -19,7 +19,12 @@ class Database:
 
     def create_db_and_tables(self) -> None:
         from api import models
-        SQLModel.metadata.create_all(self.engine)
+        with self.engine.begin() as conn:
+            # Some DB roles have an empty search_path; set a schema explicitly
+            # so PostgreSQL enum and table DDL can be created reliably.
+            conn.exec_driver_sql("CREATE SCHEMA IF NOT EXISTS public")
+            conn.exec_driver_sql("SET search_path TO public")
+            SQLModel.metadata.create_all(conn)
 
     @property
     def engine(self):

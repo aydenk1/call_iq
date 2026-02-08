@@ -15,7 +15,7 @@ from sqlmodel import select
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 from api.db import Database
-from api.models import CallRecord, PipelineStatus
+from api.models import CallDirection, CallRecord, PipelineStatus
 from pipeline.utils import setup_worker_logging
 
 
@@ -236,13 +236,27 @@ class UniFiCallIngestion(Process):
             for call_uuid, call_data in data.items():
                 call = existing_call_records.get(call_uuid, None)
                 created_at = self._parse_call_time(call_data["time"])
-                duration_sec = call_data["duration"]
-                recording = call_data.get("recording")
+                raw_direction = call_data.get("direction")
+                try:
+                    direction = CallDirection(raw_direction)
+                except ValueError:
+                    logging.warning(
+                        f"Call {call_uuid} invalid direction '{raw_direction}'; "
+                        f"defaulting direction={CallDirection.IN.value}"
+                    )
+                    direction = CallDirection.IN
+                
+                external_number = call_data.get("from") if direction == CallDirection.IN else call_data.get("to")
+                if not external_number:
+                    logging.warning(f"Missing external number for call {call_uuid} with direction {direction.value}")
+                    external_number = ""
 
+                recording = call_data.get("recording")
                 if recording is None:
                     logging.warning(f"Call {call_uuid} missing recording; defaulting recording=False")
                     recording = False
-                    
+                
+                duration_sec = call_data["duration"]
                 if duration_sec is None:
                     logging.warning(f"Call {call_uuid} missing duration; defaulting duration_sec=0")
                     duration_sec = 0
@@ -262,15 +276,18 @@ class UniFiCallIngestion(Process):
                         summary="",
                         status=status,
                         recording=recording,
+                        direction=direction,
+                        external_number=external_number,
                         raw_call_log=call_data
                     )
                     call.set_status(session, status, source=self.name, initial=True)
                     call_records.append(call)
-                    cr_modified += 1
                 elif call.status.value < status.value:
                     call.created_at = created_at
                     call.duration_sec = duration_sec
                     call.recording = recording
+                    call.direction = direction
+                    call.external_number = external_number
                     call.raw_call_log = call_data
                     call.set_status(session, status, source=self.name)
                     cr_modified += 1

@@ -15,7 +15,7 @@ from sqlmodel import select
 from tqdm import tqdm
 
 from api.db import Database
-from api.models import CallRecord, PipelineStatus
+from api.models import CallDirection, CallRecord, PipelineStatus
 from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, configure_logging, setup_worker_logging, update_call_record_status
 from pipeline.whisper_models import TranscriptionInfo, TranscriptionResult, WhisperBackend, create_backend
 from pipeline.whisper_models.whisperx_alignment_backend import WhisperXAlignmentBackend
@@ -565,6 +565,21 @@ class WhisperTranscribe(Process):
         if cpu_count is None:
             return 1
         return cpu_count
+
+    def channel_names_for_call(self, direction: CallDirection | None) -> tuple[str, str]:
+        left = self.left_channel_name
+        right = self.right_channel_name
+        if direction == CallDirection.OUT:
+            return right, left
+        return left, right
+
+    def fetch_call_directions(self, call_ids: set[str]) -> dict[str, CallDirection]:
+        if not call_ids:
+            return {}
+        with self.db.session() as session:
+            statement = select(CallRecord.id, CallRecord.direction).where(CallRecord.id.in_(call_ids))
+            rows = session.exec(statement).all()
+        return {row[0]: row[1] for row in rows if row[1] is not None}
         
     def get_call_ids(self) -> list[str]:
         """Return call_ids in DB with status == DOWNLOADED, ordered by newest first."""
@@ -607,13 +622,19 @@ class WhisperTranscribe(Process):
             id_src_files = {src_file.stem: src_file for src_file in src_files if src_file.stem in call_ids}
             return dict(sorted(id_src_files.items()))
     
-    def split_audio_path(self, id: str, mkdir: bool = False) -> tuple[Path, Path]:
+    def split_audio_path(
+        self,
+        id: str,
+        channel_names: tuple[str, str],
+        mkdir: bool = False,
+    ) -> tuple[Path, Path]:
         """ Turn audio file id to output audio files paths. """
         output_dir = self.output_root / id
         if mkdir:
             output_dir.mkdir(parents=True, exist_ok=True)
-        left = output_dir / f"{self.left_channel_name}.wav"
-        right = output_dir / f"{self.right_channel_name}.wav"   
+        left_name, right_name = channel_names
+        left = output_dir / f"{left_name}.wav"
+        right = output_dir / f"{right_name}.wav"
         return left, right
 
     def ffmpeg_split_cmd(self, src: Path, out_left: Path, out_right: Path) -> list[str]:
@@ -649,20 +670,31 @@ class WhisperTranscribe(Process):
             str(out_right),
         ]
 
-    def build_commands(self, force_preprocess: bool, call_ids: set | None) -> tuple[list[list[str]], dict[str, Path]]:
+    def build_commands(
+        self,
+        force_preprocess: bool,
+        call_ids: set | None,
+        direction_map: dict[str, CallDirection],
+    ) -> tuple[list[list[str]], dict[str, Path]]:
         """Assemble split commands for any recordings that still need processing."""
         cmds: list[list[str]] = []
         src_files = self.iter_inputs(call_ids)
         for id in src_files:
-            out_left, out_right = self.split_audio_path(id, mkdir=True)
+            channel_names = self.channel_names_for_call(direction_map.get(id))
+            out_left, out_right = self.split_audio_path(id, mkdir=True, channel_names=channel_names)
             if not force_preprocess and out_left.exists() and out_right.exists():
                 continue
             cmds.append(self.ffmpeg_split_cmd(src_files[id], out_left, out_right))
         return cmds, src_files
     
-    def preprocess_audio(self, force_preprocess: bool, call_ids: set | None) -> set:
+    def preprocess_audio(
+        self,
+        force_preprocess: bool,
+        call_ids: set | None,
+        direction_map: dict[str, CallDirection],
+    ) -> set:
         """Split every stereo recording into normalized mono speaker channels."""
-        commands, src_files = self.build_commands(force_preprocess, call_ids)
+        commands, src_files = self.build_commands(force_preprocess, call_ids, direction_map=direction_map)
         if not commands:
             logging.info("No new recordings require channel splitting.")
             return set(src_files)
@@ -685,11 +717,17 @@ class WhisperTranscribe(Process):
             logging.error(f"Splitting failures: \n{failed}")
         return set(src_files) - failed.keys()
 
-    def transcribe(self, force_transcribe: bool, call_ids: set) -> set:
+    def transcribe(
+        self,
+        force_transcribe: bool,
+        call_ids: set,
+        direction_map: dict[str, CallDirection],
+    ) -> set:
         """Transcribe each split file in parallel, tracking failures and progress."""
         targets: list[Path] = []
         for call_id in call_ids:
-            audio_paths = self.split_audio_path(call_id)
+            channel_names = self.channel_names_for_call(direction_map.get(call_id))
+            audio_paths = self.split_audio_path(call_id, channel_names=channel_names)
             for audio_path in audio_paths:
                 if force_transcribe or not audio_path.with_suffix(".json").exists():
                     targets.append(audio_path)
@@ -751,7 +789,12 @@ class WhisperTranscribe(Process):
         }
         transcript_path.write_text(json.dumps(payload, indent=2))
 
-    def postprocess_transcripts(self, force_postprocess: bool, call_ids: set[str]) -> set[str]:
+    def postprocess_transcripts(
+        self,
+        force_postprocess: bool,
+        call_ids: set[str],
+        direction_map: dict[str, CallDirection],
+    ) -> set[str]:
         """
         Stitch `customer.json` + `store.json` into a single, time-ordered conversation.
 
@@ -765,8 +808,10 @@ class WhisperTranscribe(Process):
             return set()
 
         for call_id in call_ids:
-            left_path = self.output_root / call_id / f"{self.left_channel_name}.json"
-            right_path = self.output_root / call_id / f"{self.right_channel_name}.json"
+            channel_names = self.channel_names_for_call(direction_map.get(call_id))
+            left_name, right_name = channel_names
+            left_path = self.output_root / call_id / f"{left_name}.json"
+            right_path = self.output_root / call_id / f"{right_name}.json"
             if not left_path.exists() or not right_path.exists():
                 logging.error(f"One of these paths does not exist for transcription merging\n{left_path}\n{right_path}")
                 failed_calls.add(call_id)
@@ -796,9 +841,10 @@ class WhisperTranscribe(Process):
 
     def run_transcription_pipeline(self, call_ids: set[str] | None) -> set[str]:
         """Execute one pass of the full pipeline: split audio then transcribe outputs."""
-        call_ids = self.preprocess_audio(self.force_preprocess, call_ids)
-        call_ids = self.transcribe(self.force_transcribe, call_ids)
-        call_ids = self.postprocess_transcripts(self.force_postprocess, call_ids)
+        direction_map = self.fetch_call_directions(call_ids) if call_ids else {}
+        call_ids = self.preprocess_audio(self.force_preprocess, call_ids, direction_map=direction_map)
+        call_ids = self.transcribe(self.force_transcribe, call_ids, direction_map=direction_map)
+        call_ids = self.postprocess_transcripts(self.force_postprocess, call_ids, direction_map=direction_map)
         return call_ids
     
     def update_db(self, call_ids: set[str]) -> None:

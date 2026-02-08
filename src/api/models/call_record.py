@@ -19,6 +19,11 @@ class PipelineStatus(Enum):
     DOWNLOADED = 2
     TRANSCRIBED = 3
     FINISHED = 4
+
+
+class CallDirection(str, Enum):
+    IN = "in"
+    OUT = "out"
     
 
 
@@ -30,7 +35,10 @@ class CallRecord(SQLModel, table=True):
     duration_sec: int
     summary: str
     implied_name: str | None = None
-    external_number: str | None = None
+    external_number: str
+    direction: CallDirection = Field(
+        sa_column=Column(SAEnum(CallDirection, name="call_direction")),
+    )
     audio_file_path: str | None = None
     recording: bool
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSONB))
@@ -116,6 +124,7 @@ class CallRecord(SQLModel, table=True):
             "summary": self.summary,
             "impliedName": self.implied_name,
             "externalNumber": self.external_number,
+            "direction": self.direction.value,
             "audioFilePath": self.audio_file_path,
             "recording": self.recording,
             "tags": self.tags,
