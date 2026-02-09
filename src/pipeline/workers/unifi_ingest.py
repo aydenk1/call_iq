@@ -15,7 +15,7 @@ from sqlmodel import select
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
 from api.db import Database
-from api.models import CallDirection, CallRecord, PipelineStatus
+from api.models import CallDirection, CallRecord, Caller, PipelineStatus
 from pipeline.utils import setup_worker_logging
 
 
@@ -233,6 +233,7 @@ class UniFiCallIngestion(Process):
             cr_modified: int = 0
             call_records: list[CallRecord] = []
             existing_call_records = CallRecord.get_from_id(session, data.keys())
+            caller_cache: dict[str, Caller] = {}
             for call_uuid, call_data in data.items():
                 call = existing_call_records.get(call_uuid, None)
                 created_at = self._parse_call_time(call_data["time"])
@@ -250,6 +251,19 @@ class UniFiCallIngestion(Process):
                 if not external_number:
                     logging.warning(f"Missing external number for call {call_uuid} with direction {direction.value}")
                     external_number = ""
+                external_number = str(external_number)
+
+                if external_number:
+                    caller = caller_cache.get(external_number)
+                    if caller is None:
+                        # Avoid query-triggered autoflush while new CallRecord rows
+                        # and status events are still being staged in this loop.
+                        with session.no_autoflush:
+                            caller = session.get(Caller, external_number)
+                        if caller is None:
+                            caller = Caller(id=external_number)
+                            session.add(caller)
+                        caller_cache[external_number] = caller
 
                 recording = call_data.get("recording")
                 if recording is None:

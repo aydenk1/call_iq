@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -24,6 +25,10 @@ class Database:
             # so PostgreSQL enum and table DDL can be created reliably.
             conn.exec_driver_sql("CREATE SCHEMA IF NOT EXISTS public")
             conn.exec_driver_sql("SET search_path TO public")
+            try:
+                conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            except Exception:
+                logging.warning("Could not enable pg_trgm extension; trigram indexes may be unavailable.")
             SQLModel.metadata.create_all(conn)
 
     @property

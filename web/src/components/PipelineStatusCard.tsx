@@ -11,6 +11,7 @@ import {
   formatPipelineStatus,
   normalizePipelineStatus,
 } from "@/lib/pipeline-status";
+import type { PipelineStatus } from "@/lib/pipeline-status";
 
 type PipelineStatusCardProps = {
   callId: string;
@@ -20,8 +21,8 @@ type PipelineStatusCardProps = {
 export default function PipelineStatusCard({ callId, status }: PipelineStatusCardProps) {
   const normalizedStatus = normalizePipelineStatus(status);
   const initialSelection = normalizedStatus === "UNKNOWN" ? PIPELINE_STATUS_ORDER[0] : normalizedStatus;
-  const [currentStatus, setCurrentStatus] = useState(normalizedStatus);
-  const [selectedStatus, setSelectedStatus] = useState(initialSelection);
+  const [currentStatus, setCurrentStatus] = useState<PipelineStatus>(normalizedStatus);
+  const [selectedStatus, setSelectedStatus] = useState<(typeof PIPELINE_STATUS_ORDER)[number]>(initialSelection);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +36,7 @@ export default function PipelineStatusCard({ callId, status }: PipelineStatusCar
       const updated = await updateCallStatus(callId, selectedStatus);
       const updatedStatus = normalizePipelineStatus(updated.status);
       setCurrentStatus(updatedStatus);
-      setSelectedStatus(updatedStatus);
+      setSelectedStatus(updatedStatus === "UNKNOWN" ? PIPELINE_STATUS_ORDER[0] : updatedStatus);
       markCallsForRefresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update status.";
@@ -63,7 +64,12 @@ export default function PipelineStatusCard({ callId, status }: PipelineStatusCar
             id={`status-${callId}`}
             className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm"
             value={selectedStatus}
-            onChange={(event) => setSelectedStatus(event.target.value)}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (PIPELINE_STATUS_ORDER.includes(next as (typeof PIPELINE_STATUS_ORDER)[number])) {
+                setSelectedStatus(next as (typeof PIPELINE_STATUS_ORDER)[number]);
+              }
+            }}
           >
             {PIPELINE_STATUS_ORDER.map((value) => (
               <option key={value} value={value}>

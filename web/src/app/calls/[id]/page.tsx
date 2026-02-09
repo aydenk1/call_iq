@@ -7,36 +7,40 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import PipelineStatusCard from "@/components/PipelineStatusCard";
-import { fetchCallRecords } from "@/lib/calls";
+import { fetchCallRecord, fetchCallerWithCalls } from "@/lib/calls";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { getTagTone } from "@/lib/tag-tone";
 
 type CallDetailPageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ returnTo?: string }>;
 };
 
 export const dynamic = "force-dynamic";
 
-export default async function CallDetailPage({ params }: CallDetailPageProps) {
+export default async function CallDetailPage({ params, searchParams }: CallDetailPageProps) {
   const { id } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
   const callId = decodeURIComponent(id);
-  const callRecords = await fetchCallRecords();
-  const call = callRecords.find((entry) => entry.id === callId);
+  const returnToRaw = resolvedSearchParams?.returnTo ?? "/";
+  const returnTo = returnToRaw.startsWith("/") ? returnToRaw : "/";
+  const call = await fetchCallRecord(callId);
 
   if (!call) {
     notFound();
   }
 
-  const relatedCalls = call.contactProfile?.previousCallIds
-    .map((id) => callRecords.find((entry) => entry.id === id))
-    .filter((entry): entry is (typeof callRecords)[number] => Boolean(entry));
+  const callerPayload = call.externalNumber ? await fetchCallerWithCalls(call.externalNumber) : null;
+  const relatedCalls = callerPayload
+    ? callerPayload.calls.filter((entry) => entry.id !== call.id)
+    : [];
   const linkedCallCount = relatedCalls?.length ?? 0;
 
   return (
     <main className="container space-y-8 py-10">
       <div className="flex items-center justify-between gap-4">
         <Button asChild variant="outline" size="sm">
-          <Link href="/">Back to calls</Link>
+          <Link href={returnTo}>Back to calls</Link>
         </Button>
         <span className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Call detail</span>
       </div>
@@ -48,10 +52,17 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
             <h1 className="text-3xl sm:text-4xl">{call.summary}</h1>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+            {call.externalNumber && (
+              <Link
+                className="text-foreground underline decoration-dotted"
+                href={`/callers/${encodeURIComponent(call.externalNumber)}?returnTo=${encodeURIComponent(returnTo)}`}
+              >
+                {call.externalNumber}
+              </Link>
+            )}
             <span>{formatDateTime(call.createdAt)}</span>
             <span>{formatDuration(call.durationSec)}</span>
             {call.impliedName && <span>Implied name: {call.impliedName}</span>}
-            {call.externalNumber && <span>{call.externalNumber}</span>}
           </div>
         </CardHeader>
         <CardContent>
@@ -178,7 +189,10 @@ export default async function CallDetailPage({ params }: CallDetailPageProps) {
                 <ul className="space-y-2 text-sm">
                   {relatedCalls.map((related) => (
                     <li key={related.id}>
-                      <Link className="text-foreground underline decoration-dotted" href={`/calls/${related.id}`}>
+                      <Link
+                        className="text-foreground underline decoration-dotted"
+                        href={`/calls/${related.id}?returnTo=${encodeURIComponent(returnTo)}`}
+                      >
                         {related.summary}
                       </Link>
                       <div className="text-xs text-muted-foreground">

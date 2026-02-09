@@ -46,3 +46,16 @@ export type CallRecord = {
   suggestedTasks: string[];
   contactProfile?: ContactProfile;
 };
+
+export type Caller = {
+  id: string;
+  impliedName?: string;
+  profile: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CallerWithCalls = {
+  caller: Caller;
+  calls: CallRecord[];
+};

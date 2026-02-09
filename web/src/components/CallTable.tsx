@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 
 import AudioScrub from "@/components/AudioScrub";
 import Tag from "@/components/Tag";
@@ -78,6 +79,8 @@ function ExpandedCallDetails({ call }: ExpandedCallDetailsProps) {
 }
 
 export default function CallTable({ calls }: CallTableProps) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [callRows, setCallRows] = useState<CallRecord[]>(calls);
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -104,6 +107,11 @@ export default function CallTable({ calls }: CallTableProps) {
   const toggleExpanded = (id: string) => {
     setExpandedId((current) => (current === id ? null : id));
   };
+
+  const returnTo = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname, searchParams]);
 
   const handleStatusChange = async (callId: string, nextStatus: string) => {
     if (!nextStatus) {
@@ -140,7 +148,8 @@ export default function CallTable({ calls }: CallTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[38%]">Summary</TableHead>
+            <TableHead className="w-[34%]">Summary</TableHead>
+            <TableHead>External number</TableHead>
             <TableHead>
               <Button
                 type="button"
@@ -172,13 +181,25 @@ export default function CallTable({ calls }: CallTableProps) {
                     <div className="flex flex-col gap-1">
                       <Link
                         className="font-medium text-foreground hover:underline"
-                        href={`/calls/${call.id}`}
+                        href={`/calls/${call.id}?returnTo=${encodeURIComponent(returnTo)}`}
                         onClick={(event) => event.stopPropagation()}
                       >
                         {call.summary}
                       </Link>
-                      <span className="text-xs text-muted-foreground">{call.externalNumber ?? "-"}</span>
                     </div>
+                  </TableCell>
+                  <TableCell className="py-2 text-sm text-muted-foreground">
+                    {call.externalNumber ? (
+                      <Link
+                        className="hover:text-foreground hover:underline"
+                        href={`/callers/${encodeURIComponent(call.externalNumber)}?returnTo=${encodeURIComponent(returnTo)}`}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {call.externalNumber}
+                      </Link>
+                    ) : (
+                      "-"
+                    )}
                   </TableCell>
                   <TableCell className="py-2 text-sm text-muted-foreground">
                     {formatDateTime(call.createdAt)}
@@ -239,7 +260,7 @@ export default function CallTable({ calls }: CallTableProps) {
                 </TableRow>
                 {expandedId === call.id && (
                   <TableRow>
-                    <TableCell colSpan={5} className="bg-muted/40 py-4">
+                    <TableCell colSpan={6} className="bg-muted/40 py-4">
                       <ExpandedCallDetails call={call} />
                     </TableCell>
                   </TableRow>

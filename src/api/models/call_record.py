@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Index, func, or_, text
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import Enum as SAEnum
 from sqlmodel import Field, Session, SQLModel, select
@@ -29,13 +30,32 @@ class CallDirection(str, Enum):
 
 class CallRecord(SQLModel, table=True):
     __tablename__ = "call_records"
+    __table_args__ = (
+        Index(
+            "ix_call_records_transcript_text_fts",
+            text("to_tsvector('english', coalesce(transcript_text, ''))"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "ix_call_records_external_number_trgm",
+            "external_number",
+            postgresql_using="gin",
+            postgresql_ops={"external_number": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_call_records_implied_name_trgm",
+            "implied_name",
+            postgresql_using="gin",
+            postgresql_ops={"implied_name": "gin_trgm_ops"},
+        ),
+    )
 
     id: str = Field(primary_key=True, index=True)
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), index=True))
     duration_sec: int
     summary: str
     implied_name: str | None = None
-    external_number: str
+    external_number: str = Field(index=True)
     direction: CallDirection = Field(
         sa_column=Column(SAEnum(CallDirection, name="call_direction")),
     )
@@ -55,14 +75,56 @@ class CallRecord(SQLModel, table=True):
     )
 
     @classmethod
-    def list_records(cls, session: Session, limit: int = 200, offset: int = 0) -> list[CallRecord]:
-        statement = (
-            select(cls)
-            .order_by(cls.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
+    def _search_filters(
+        cls,
+        external_number: str | None = None,
+        q: str | None = None,
+    ) -> list[ColumnElement[bool]]:
+        filters: list[ColumnElement[bool]] = []
+        if external_number is not None:
+            filters.append(cls.external_number == external_number)
+        if q is not None and q.strip():
+            search = q.strip()
+            filters.append(
+                or_(
+                    cls.external_number.ilike(f"%{search}%"),
+                    cls.implied_name.ilike(f"%{search}%"),
+                    func.to_tsvector("english", func.coalesce(cls.transcript_text, "")).op("@@")(
+                        func.websearch_to_tsquery("english", search)
+                    ),
+                )
+            )
+        return filters
+
+    @classmethod
+    def list_records(
+        cls,
+        session: Session,
+        limit: int = 200,
+        offset: int = 0,
+        external_number: str | None = None,
+        q: str | None = None,
+    ) -> list[CallRecord]:
+        statement = select(cls)
+        filters = cls._search_filters(external_number=external_number, q=q)
+        if filters:
+            statement = statement.where(*filters)
+        statement = statement.order_by(cls.created_at.desc()).offset(offset).limit(limit)
         return list(session.exec(statement))
+
+    @classmethod
+    def count_records(
+        cls,
+        session: Session,
+        external_number: str | None = None,
+        q: str | None = None,
+    ) -> int:
+        statement = select(func.count()).select_from(cls)
+        filters = cls._search_filters(external_number=external_number, q=q)
+        if filters:
+            statement = statement.where(*filters)
+        result = session.exec(statement).one()
+        return int(result)
     
     @classmethod
     def get_from_id(cls, session: Session, call_ids: Collection[str]) -> dict[str, CallRecord]:

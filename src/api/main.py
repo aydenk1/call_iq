@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from .db import Database
-from .models import CallRecord, PipelineStatus
+from .models import CallRecord, Caller, PipelineStatus
 
 
 def parse_origins(raw_origins: str | None) -> list[str]:
@@ -77,10 +77,32 @@ def health_check() -> dict[str, str]:
 def list_call_records(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    external_number: str | None = Query(default=None),
+    q: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> Sequence[dict[str, object]]:
-    calls = CallRecord.list_records(session=session, limit=limit, offset=offset)
+    calls = CallRecord.list_records(
+        session=session,
+        limit=limit,
+        offset=offset,
+        external_number=external_number,
+        q=q,
+    )
     return [call.to_camel_dict() for call in calls]
+
+
+@app.get("/calls/count")
+def count_call_records(
+    external_number: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    total = CallRecord.count_records(
+        session=session,
+        external_number=external_number,
+        q=q,
+    )
+    return {"count": total}
 
 
 @app.get("/calls/{call_id}")
@@ -132,3 +154,25 @@ def stream_call_audio(call_id: str, session: Session = Depends(get_session)) -> 
 
     media_type, _ = mimetypes.guess_type(str(audio_path))
     return FileResponse(path=audio_path, media_type=media_type or "application/octet-stream")
+
+
+@app.get("/callers/{caller_id}")
+def get_caller(
+    caller_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    caller = session.get(Caller, caller_id)
+    if not caller:
+        raise HTTPException(status_code=404, detail="Caller not found")
+    calls = CallRecord.list_records(
+        session=session,
+        limit=limit,
+        offset=offset,
+        external_number=caller_id,
+    )
+    return {
+        "caller": caller.to_camel_dict(),
+        "calls": [call.to_camel_dict() for call in calls],
+    }

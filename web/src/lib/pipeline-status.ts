@@ -7,7 +7,8 @@ export const PIPELINE_STATUS_ORDER = [
   "FINISHED",
 ] as const;
 
-export type PipelineStatus = (typeof PIPELINE_STATUS_ORDER)[number] | "UNKNOWN";
+export type KnownPipelineStatus = (typeof PIPELINE_STATUS_ORDER)[number];
+export type PipelineStatus = KnownPipelineStatus | "UNKNOWN";
 
 const STATUS_BY_VALUE = new Map<number, PipelineStatus>([
   [-1, "FAILED"],
@@ -18,7 +19,7 @@ const STATUS_BY_VALUE = new Map<number, PipelineStatus>([
   [4, "FINISHED"],
 ]);
 
-const STATUS_SET = new Set(PIPELINE_STATUS_ORDER);
+const STATUS_SET = new Set<KnownPipelineStatus>(PIPELINE_STATUS_ORDER);
 
 export const normalizePipelineStatus = (status: unknown): PipelineStatus => {
   if (typeof status === "string") {
@@ -30,8 +31,8 @@ export const normalizePipelineStatus = (status: unknown): PipelineStatus => {
       return STATUS_BY_VALUE.get(Number(trimmed)) ?? "UNKNOWN";
     }
     const normalized = trimmed.split(".").pop()?.toUpperCase() ?? "";
-    if (STATUS_SET.has(normalized as PipelineStatus)) {
-      return normalized as PipelineStatus;
+    if (STATUS_SET.has(normalized as KnownPipelineStatus)) {
+      return normalized as KnownPipelineStatus;
     }
     return "UNKNOWN";
   }

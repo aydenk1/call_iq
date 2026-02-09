@@ -27,7 +27,7 @@ whisper:
   db_commit_batch_size: 4 # Process this many files before commiting to db.
   force: # Forces reprocessing of the whisper pipeline 
     preprocess: false
-    transcribe: true
+    transcribe: false
     postprocess: false
   whisper_backend: "openai-whisper"
   whisper_model_kwargs:

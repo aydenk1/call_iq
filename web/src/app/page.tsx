@@ -10,7 +10,7 @@ import { formatDateTime, formatDuration } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 type HomePageProps = {
-  searchParams?: Promise<{ page?: string }>;
+  searchParams?: Promise<{ page?: string; q?: string }>;
 };
 
 const PAGE_SIZE = 25;
@@ -18,17 +18,31 @@ const PAGE_SIZE = 25;
 export default async function HomePage({ searchParams }: HomePageProps) {
   const resolvedParams = searchParams ? await searchParams : {};
   const pageRaw = resolvedParams?.page ?? "1";
+  const query = (resolvedParams?.q ?? "").trim();
   const pageNumber = Number(pageRaw);
   const currentPage = Number.isFinite(pageNumber) && pageNumber > 0 ? Math.floor(pageNumber) : 1;
   const offset = (currentPage - 1) * PAGE_SIZE;
-  const { records: callRecords, hasMore } = await fetchCallRecordsPage({
+  const { records: callRecords, hasMore, totalCount } = await fetchCallRecordsPage({
     limit: PAGE_SIZE,
     offset,
+    q: query,
   });
   const totalDuration = callRecords.reduce((total, call) => total + call.durationSec, 0);
   const latestCall = callRecords[0];
   const prevPage = currentPage > 1 ? currentPage - 1 : null;
   const nextPage = hasMore ? currentPage + 1 : null;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const pageHref = (page: number) => {
+    const params = new URLSearchParams();
+    if (page > 1) {
+      params.set("page", String(page));
+    }
+    if (query) {
+      params.set("q", query);
+    }
+    const encoded = params.toString();
+    return encoded ? `/?${encoded}` : "/";
+  };
 
   return (
     <main className="container space-y-10 py-10">
@@ -67,6 +81,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       </header>
 
       <section className="space-y-4">
+        <form className="flex flex-wrap items-center gap-2" method="get">
+          <input
+            className="h-9 w-full max-w-lg rounded-md border border-input bg-background px-3 text-sm"
+            defaultValue={query}
+            name="q"
+            placeholder="Search transcript, external number, or implied name"
+            type="search"
+          />
+          <Button type="submit" size="sm">Search</Button>
+          {query ? (
+            <Button asChild type="button" size="sm" variant="outline">
+              <Link href="/">Clear</Link>
+            </Button>
+          ) : null}
+        </form>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm">
             All calls
@@ -86,12 +115,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-            Page {currentPage}
+            Page {currentPage} of {totalPages}
           </span>
           <div className="flex items-center gap-2">
             {prevPage ? (
               <Button asChild size="sm" variant="outline">
-                <Link href={prevPage === 1 ? "/" : `/?page=${prevPage}`}>Previous</Link>
+                <Link href={pageHref(prevPage)}>Previous</Link>
               </Button>
             ) : (
               <Button size="sm" variant="outline" disabled>
@@ -100,7 +129,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
             {nextPage ? (
               <Button asChild size="sm" variant="outline">
-                <Link href={`/?page=${nextPage}`}>Next</Link>
+                <Link href={pageHref(nextPage)}>Next</Link>
               </Button>
             ) : (
               <Button size="sm" variant="outline" disabled>
