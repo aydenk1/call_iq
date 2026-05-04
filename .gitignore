@@ -210,5 +210,6 @@ data/
 
 web/.next
 web/node_modules
+web/tsconfig.tsbuildinfo
 web/public
 !web/src/lib

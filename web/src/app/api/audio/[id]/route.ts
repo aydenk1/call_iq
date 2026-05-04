@@ -93,7 +93,7 @@ export async function GET(
   try {
     await stat(recordingPath);
     target = { path: recordingPath, contentType: "audio/mpeg" };
-  } catch (error) {
+  } catch {
     try {
       await stat(whisperPath);
       target = { path: whisperPath, contentType: "audio/wav" };

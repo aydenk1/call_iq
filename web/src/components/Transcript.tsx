@@ -69,8 +69,6 @@ export default function Transcript({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef<Array<HTMLDivElement | HTMLButtonElement | null>>([]);
 
-  rowRefs.current = [];
-
   const activeIndex = useMemo(
     () => getActiveIndex(segments, currentTimeSec),
     [segments, currentTimeSec],
@@ -114,25 +112,20 @@ export default function Transcript({
     return () => window.cancelAnimationFrame(rafId);
   }, [activeIndex, autoScroll, scrollBehavior]);
 
-  const clampedHeight =
+  const measuredMinHeight =
     !height && rowMetrics && safeMinRows
       ? rowMetrics.height * safeMinRows + rowMetrics.marginBottom * Math.max(0, safeMinRows - 1)
       : undefined;
-  const maxHeightValue = clampedHeight
-    ? maxHeight
-      ? `min(${clampedHeight}px, ${maxHeight})`
-      : `${clampedHeight}px`
-    : maxHeight;
-  const shouldClamp = Boolean(clampedHeight);
   const isClickable = Boolean(onSeek);
 
   return (
     <div
-      className={cn("space-y-3", (height || shouldClamp || maxHeight) && "overflow-y-auto pr-2")}
+      className={cn("space-y-3", (height || maxHeight) && "overflow-y-auto pr-2")}
       ref={scrollContainerRef}
       style={{
         ...(height ? { height } : {}),
-        ...(maxHeightValue ? { maxHeight: maxHeightValue } : {}),
+        ...(measuredMinHeight ? { minHeight: `${measuredMinHeight}px` } : {}),
+        ...(maxHeight ? { maxHeight } : {}),
       }}
     >
       {segments.map((segment, index) => {

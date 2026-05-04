@@ -83,7 +83,7 @@ export default function PipelineStatusCard({ callId, status }: PipelineStatusCar
         </div>
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
         <p className="text-xs text-muted-foreground">
-          Set to "Downloaded" to re-run transcription, or "Download queued" to re-run ingestion.
+          Set to &quot;Downloaded&quot; to re-run transcription, or &quot;Download queued&quot; to re-run ingestion.
         </p>
       </CardContent>
     </Card>

@@ -47,9 +47,12 @@ export default function AudioScrub({
       return;
     }
     audioRef.current.currentTime = target;
-    setCurrentSec(target);
-    onTimeUpdate?.(target);
-    onSeekApplied?.(target);
+    const rafId = window.requestAnimationFrame(() => {
+      setCurrentSec(target);
+      onTimeUpdate?.(target);
+      onSeekApplied?.(target);
+    });
+    return () => window.cancelAnimationFrame(rafId);
   }, [seekToSec, onSeekApplied, onTimeUpdate]);
 
   const handleTimeUpdate = useCallback(() => {

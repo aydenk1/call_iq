@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import AudioScrub from "@/components/AudioScrub";
 import Transcript from "@/components/Transcript";
@@ -48,15 +48,6 @@ export default function AudioTranscriptCard({
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [seekToSec, setSeekToSec] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (runs.length === 0) {
-      return;
-    }
-    if (!runs.some((run) => run.id === selectedId)) {
-      setSelectedId(runs[runs.length - 1].id);
-    }
-  }, [runs, selectedId]);
 
   const selectedRun = useMemo(() => {
     if (runs.length === 0) {
