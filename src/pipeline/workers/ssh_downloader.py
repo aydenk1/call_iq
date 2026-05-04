@@ -60,9 +60,19 @@ class SSHDownloader(Process):
             self.terminate()
             self.join(timeout=terminate_timeout)
 
-    def get_db_queue(self) -> set[str]:
+    def get_db_queue(self) -> dict[str, str]:
         with self.db.session() as session:
-            return CallRecord.list_ids(session, status=PipelineStatus.DOWNLOAD_QUEUED)
+            call_ids = CallRecord.list_ids(session, status=PipelineStatus.DOWNLOAD_QUEUED)
+            call_records = CallRecord.get_from_id(session, call_ids)
+
+            call_filename_map = {}
+            for call_id in call_ids:
+                if "recording_filename" in call_records[call_id].raw_call_log:
+                    call_filename_map[call_id] = call_records[call_id].raw_call_log["recording_filename"]
+                else:
+                    call_filename_map[call_id] = call_filename_map
+            return call_filename_map
+
 
     def get_local_recordings(self) -> list[Path]:
         return sorted(
@@ -165,33 +175,34 @@ class SSHDownloader(Process):
             total += n
         return total
 
-    def prepare_transfer(self, download_queue: set[str] | None = None) -> tuple[int, list[str], list[str], list[Path]]:
+    def prepare_transfer(self, download_queue: dict[str, str] | None = None) -> tuple[int, list[str], list[str], list[Path]]:
         """ Finds remote files and adds them to the download queue if not already on disk. """
         queue_paths_rel: list[str] = []
         queue_paths_abs: list[str] = []
         skipped_paths: list[Path] = []
-        cmd = [*self.ssh_base, "find", str(self.remote_dir), "-type", "f", "-print"]
-        out = subprocess.check_output(cmd, text=True)
-        abs_remote_paths = sorted([Path(line.strip()) for line in out.splitlines() if line.strip()])
 
-        # Build missing file list 
-        for rp in abs_remote_paths:
-            rel = rp.relative_to(self.remote_dir)
-            lp = self.local_dir / rel
-            # Only download files in queue, if set, if not already on the server
-            if download_queue is not None:
-                if rel.stem in download_queue:
-                    if not lp.exists():
+        # Scan entire directory for files if no queue is provided
+        if download_queue is None:
+            cmd = [*self.ssh_base, "find", str(self.remote_dir), "-type", "f", "-print"]
+            out = subprocess.check_output(cmd, text=True)
+            abs_remote_paths = sorted([Path(line.strip()) for line in out.splitlines() if line.strip()])
+            for rp in abs_remote_paths:
+                rel = rp.relative_to(self.remote_dir)
+                lp = self.local_dir / rel
+                if not lp.exists():
                         queue_paths_rel.append(str(rel))
                         queue_paths_abs.append(str(rp))
-                    else:
-                        skipped_paths.append(lp)
-            else:
-                if not lp.exists():
-                    queue_paths_rel.append(str(rel))
-                    queue_paths_abs.append(str(rp))
                 else:
                     skipped_paths.append(lp)
+        
+        # Build abs_path from known call files in the database
+        else:    
+            for call_id in download_queue:
+                rel = Path(download_queue[call_id])
+                lp = self.local_dir / rel
+                rp = self.remote_dir / rel
+                queue_paths_rel.append(str(rel))
+                queue_paths_abs.append(str(rp))
 
         total_size = sum([self.find_transfer_size(chunk) for chunk in chunked(queue_paths_abs, 250)])
         return total_size, queue_paths_rel, queue_paths_abs, skipped_paths
@@ -256,21 +267,24 @@ class SSHDownloader(Process):
                 raise RuntimeError(f"local tar failed rc={local_rc}\n{local_err}")
         return
     
-    def finalize_transfer(self, queue_paths_rel: list[str]) -> tuple[list[Path], list[Path]]:
+    def finalize_transfer(self, queue_paths_rel: list[str], download_queue: dict[str, str]) -> tuple[list[Path], list[Path]]:
         """
         Move all files from recordings.tmp into recordings.
+        Rename files to their call_id name if they have a specified different file name. Must handle both for backwards compatiability. 
         Returns (moved_files, failed_files)
         """
         moved = []
         failed = []
+        rvsd_download_queue = {v: k for k, v in download_queue.items()}
 
         for rel in queue_paths_rel:
             src = self.local_temp_dir / rel
             if not src.is_file():
                 failed.append(src)
                 continue
-
-            dst = self.local_dir / rel
+            
+            # Rename file to normalize recording name to {call_id}.mp3
+            dst = self.local_dir / f"{rvsd_download_queue[rel]}.mp3"
             dst.parent.mkdir(parents=True, exist_ok=True)
 
             os.replace(src, dst)   # atomic rename on same filesystem
@@ -278,18 +292,6 @@ class SSHDownloader(Process):
                     
         rmtree(self.local_temp_dir, ignore_errors=True)
         return moved, failed
-    
-    def run_file(self) -> None:
-        """ Old run method for local testing."""
-        while not self._stop_event.is_set():
-            total_size, queue_paths_rel, _queue_paths_abs, skipped = self.prepare_transfer()
-            if not queue_paths_rel:
-                logging.info("No new files to download.")
-            else:
-                self.transfer(total_size, queue_paths_rel)
-                self.finalize_transfer(queue_paths_rel)
-            self._stop_event.wait(self.sleep_s)
-
 
     def run(self) -> None:
         """ Start file sync based off of DB records """
@@ -315,7 +317,7 @@ class SSHDownloader(Process):
                     logging.info("No new files to download.")
                 else:
                     self.transfer(total_size, queue_paths_rel)
-                    successful, failed = self.finalize_transfer(queue_paths_rel)
+                    successful, failed = self.finalize_transfer(queue_paths_rel, download_queue)
                     logging.info(f"Finalize transfer {self.local_temp_dir} -> {self.local_dir}: moved {len(successful)}, failed {len(failed)}")
 
                 ss, sk, f = self.update_db(successful, skipped, failed)

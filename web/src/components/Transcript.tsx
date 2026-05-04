@@ -12,6 +12,7 @@ type TranscriptProps = {
   currentTimeSec?: number;
   autoScroll?: boolean;
   scrollBehavior?: ScrollBehavior;
+  height?: string;
   maxHeight?: string;
   onSeek?: (startSec: number) => void;
 };
@@ -56,6 +57,7 @@ export default function Transcript({
   currentTimeSec,
   autoScroll = true,
   scrollBehavior = "auto",
+  height,
   maxHeight,
   onSeek,
 }: TranscriptProps) {
@@ -113,7 +115,7 @@ export default function Transcript({
   }, [activeIndex, autoScroll, scrollBehavior]);
 
   const clampedHeight =
-    rowMetrics && safeMinRows
+    !height && rowMetrics && safeMinRows
       ? rowMetrics.height * safeMinRows + rowMetrics.marginBottom * Math.max(0, safeMinRows - 1)
       : undefined;
   const maxHeightValue = clampedHeight
@@ -126,9 +128,12 @@ export default function Transcript({
 
   return (
     <div
-      className={cn("space-y-3", (shouldClamp || maxHeight) && "max-h-full overflow-y-auto pr-2")}
+      className={cn("space-y-3", (height || shouldClamp || maxHeight) && "overflow-y-auto pr-2")}
       ref={scrollContainerRef}
-      style={maxHeightValue ? { maxHeight: maxHeightValue } : undefined}
+      style={{
+        ...(height ? { height } : {}),
+        ...(maxHeightValue ? { maxHeight: maxHeightValue } : {}),
+      }}
     >
       {segments.map((segment, index) => {
         const align = getSpeakerAlign(segment.speaker);

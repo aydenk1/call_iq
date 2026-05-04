@@ -72,6 +72,7 @@ function ExpandedCallDetails({ call }: ExpandedCallDetailsProps) {
         currentTimeSec={currentTimeSec}
         autoScroll={isPlaying}
         scrollBehavior={isPlaying ? "smooth" : "auto"}
+        height="66.667vh"
         onSeek={handleSeek}
       />
     </div>
