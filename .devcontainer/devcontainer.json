@@ -7,7 +7,13 @@
   "workspaceFolder": "/app",
   "customizations": {
     "vscode": {
-      "extensions": ["ms-python.python", "ms-python.vscode-pylance", "ms-python.debugpy", "openai.chatgpt"],
+      "extensions": [
+        "ms-python.python", 
+        "ms-python.vscode-pylance", 
+        "ms-python.debugpy", 
+        "ms-python.isort", 
+        "openai.chatgpt"
+      ],
       "settings": {
         "python.analysis.extraPaths": ["${workspaceFolder}/src"],
         "python.analysis.exclude": ["**/data/**"],
@@ -18,7 +24,9 @@
         },
         "search.exclude": {
           "**/data/**": true
-        }
+        },
+        "isort.importStrategy": "fromEnvironment",
+        "isort.interpreter": ["/opt/venv/bin/python"]
       }
     }
   },

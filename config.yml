@@ -74,16 +74,5 @@ whisper:
       batch_size: 8
       num_workers: 10  # Uses all cpu cores
 
-  
-  # hotwords: >-
-  #  Oswalt-Thomas
-  #  Goodyear
-  #  Wabash
-  #  GE
-  #  tires
-  #  appliances
-  #  alignment
-  #  service
-  #  Ayden
-  #  Zach
-  #  Eric
+enrichment: 
+  activate: false # Performs transcription summarization, call tagging, and identity building.
