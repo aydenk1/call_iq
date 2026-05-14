@@ -1,9 +1,11 @@
 {
-  "name": "call-iq",
-  "dockerComposeFile": ["../docker-compose.yml"],
+  "name": "google-ads-feature",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "docker-compose.google-ads-feature.yml"
+  ],
   "service": "call_iq",
   "runServices": ["call_iq"],
-  "forwardPorts": [3000],
   "workspaceFolder": "/app",
   "customizations": {
     "vscode": {

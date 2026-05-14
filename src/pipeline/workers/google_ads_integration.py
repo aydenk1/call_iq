@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import date
+import json
 from typing import Any
 
 from google.ads.googleads.client import GoogleAdsClient
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+
+
+GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
 
 
 @dataclass(slots=True)
@@ -25,24 +33,45 @@ class GoogleAdsIntegration:
     def __init__(
         self,
         developer_token: str,
-        client_id: str,
-        client_secret: str,
-        refresh_token: str,
+        service_account_json_b64: str,
         customer_id: str,
         login_customer_id: str | None = None,
+        campaign_ids: list[str] | None = None,
+        api_version: str | None = None,
+        use_proto_plus: bool = True,
     ) -> None:
-        config: dict[str, Any] = {
-            "developer_token": developer_token,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": refresh_token,
-            "use_proto_plus": True,
-        }
-        if login_customer_id:
-            config["login_customer_id"] = login_customer_id
+        service_account_info = self._decode_service_account_json(service_account_json_b64)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=[GOOGLE_ADS_SCOPE],
+        )
+        credentials.refresh(Request())
 
         self.customer_id = customer_id.replace("-", "")
-        self.client = GoogleAdsClient.load_from_dict(config)
+        self.client = GoogleAdsClient(
+            credentials=credentials,
+            developer_token=developer_token,
+            login_customer_id=login_customer_id,
+            version=api_version,
+            use_proto_plus=use_proto_plus,
+        )
+        self.campaign_ids = campaign_ids or []
+
+    @staticmethod
+    def _decode_service_account_json(service_account_json_b64: str) -> dict[str, Any]:
+        try:
+            decoded = base64.b64decode("".join(service_account_json_b64.split()), validate=True)
+        except binascii.Error as exc:
+            raise ValueError("GOOGLE_ADS_SERVICE_ACCOUNT_JSON_B64 is not valid base64.") from exc
+
+        try:
+            service_account_info = json.loads(decoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("GOOGLE_ADS_SERVICE_ACCOUNT_JSON_B64 must decode to a JSON object.") from exc
+
+        if not isinstance(service_account_info, dict):
+            raise ValueError("GOOGLE_ADS_SERVICE_ACCOUNT_JSON_B64 must decode to a JSON object.")
+        return service_account_info
 
     def fetch_calls_for_date_range(
         self,
@@ -53,9 +82,14 @@ class GoogleAdsIntegration:
     ) -> list[GoogleAdsCallRecord]:
         service = self.client.get_service("GoogleAdsService")
 
+        ids = campaign_ids if campaign_ids is not None else self.campaign_ids
         campaign_filter = ""
-        if campaign_ids:
-            safe_ids = ", ".join(campaign_ids)
+        if ids:
+            normalized_ids = [str(campaign_id).replace("-", "").strip() for campaign_id in ids]
+            invalid_ids = [campaign_id for campaign_id in normalized_ids if not campaign_id.isdigit()]
+            if invalid_ids:
+                raise ValueError(f"Google Ads campaign IDs must be numeric: {invalid_ids}")
+            safe_ids = ", ".join(normalized_ids)
             campaign_filter = f"AND campaign.id IN ({safe_ids})"
 
         query = f"""

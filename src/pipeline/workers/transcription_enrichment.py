@@ -5,7 +5,6 @@ import dataclasses
 import gc
 import json
 import logging
-import os
 import time
 from datetime import date, timedelta
 from dataclasses import dataclass
@@ -20,7 +19,7 @@ from api.db import Database
 from api.models import CallDirection, CallRecord, PipelineStatus
 from pipeline.utils import AUDIO_EXTS, SubprocessPool, chunked, configure_logging, setup_worker_logging, update_call_record_status
 from pipeline.workers.base import PipelineWorker
-from pipeline.workers.google_ads_helper import GoogleAdsIntegration
+from pipeline.workers.google_ads_integration import GoogleAdsIntegration
 
 
 class CallEnrichmentService:
@@ -39,31 +38,31 @@ class TranscriptionEnrichmentPipeline(PipelineWorker):
                  sleep_s: int = 60,
                  log_level: int | None = None,
                  log_dir: Path | None = None,
-                 google_ads_integration: GoogleAdsIntegration | None = None) -> None:
+                 google_ads_integration: GoogleAdsIntegration | None = None,
+                 google_ads_call_ingestion_config: Mapping[str, Any] | None = None) -> None:
         
         super().__init__(log_level=log_level, log_dir=log_dir)
         self.sleep_s = sleep_s
         self.google_ads_integration = google_ads_integration
+        self.google_ads_call_ingestion_config = google_ads_call_ingestion_config or {}
     
     def google_ads_enrichment(self) -> None:
         if self.google_ads_integration is None:
             self.logger.info("Google Ads integration not configured, skipping enrichment.")
             return
 
-        
-
-        days_back = int(os.getenv("GOOGLE_ADS_LOOKBACK_DAYS", "7"))
+        days_back = int(self.google_ads_call_ingestion_config.get("lookback_days", 7))
         end_date = date.today()
         start_date = end_date - timedelta(days=days_back)
 
-        campaign_ids = os.getenv("GOOGLE_ADS_CAMPAIGN_IDS")
-        ids = [c.strip() for c in campaign_ids.split(",") if c.strip()] if campaign_ids else None
+        campaign_ids = self.google_ads_call_ingestion_config.get("campaign_ids")
+        ids = [str(campaign_id).strip() for campaign_id in campaign_ids if str(campaign_id).strip()] if campaign_ids else None
 
         call_rows = self.google_ads_integration.fetch_calls_for_date_range(
             start_date=start_date,
             end_date=end_date,
             campaign_ids=ids,
-            limit=int(os.getenv("GOOGLE_ADS_QUERY_LIMIT", "1000")),
+            limit=int(self.google_ads_call_ingestion_config.get("query_limit", 1000)),
         )
 
         self.logger.info("Fetched %s Google Ads call rows from %s to %s", len(call_rows), start_date, end_date)

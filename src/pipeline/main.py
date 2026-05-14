@@ -24,7 +24,7 @@ from pipeline.workers.ssh_downloader import SSHDownloader
 from pipeline.workers.unifi_ingest import UniFiCallIngestion, UniFiOSClient
 from pipeline.workers.whisper_transcribe import WhisperTranscribe
 from pipeline.workers.transcription_enrichment import TranscriptionEnrichmentPipeline
-from pipeline.workers.google_ads_helper import GoogleAdsIntegration
+from pipeline.workers.google_ads_integration import GoogleAdsIntegration
 
 
 def load_config(path: Path) -> dict[str, dict[str, Any]]:
@@ -34,6 +34,13 @@ def load_config(path: Path) -> dict[str, dict[str, Any]]:
     if not isinstance(data, dict):
         raise ValueError(f"Config file must contain a YAML mapping: {path}")
     return data
+
+
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Required environment variable is not set: {name}")
+    return value
 
 
 def main(argv: Sequence[str]) -> int:
@@ -105,14 +112,18 @@ def main(argv: Sequence[str]) -> int:
         transcriber.start()
     
     if config["enrichment"].pop("activate"):
+        google_ads_call_ingestion_config = None
         if config["google_ads"].pop("activate"):
+            google_ads_config = config["google_ads"]
+            google_ads_call_ingestion_config = google_ads_config.get("call_ingestion", {})
             google_ads_integration = GoogleAdsIntegration(
-                developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
-                client_id=os.getenv("GOOGLE_ADS_CLIENT_ID", ""),
-                client_secret=os.getenv("GOOGLE_ADS_CLIENT_SECRET", ""),
-                refresh_token=os.getenv("GOOGLE_ADS_REFRESH_TOKEN", ""),
-                customer_id=os.getenv("GOOGLE_ADS_CUSTOMER_ID", ""),
-                login_customer_id=os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", ""),
+                developer_token=required_env("GOOGLE_ADS_DEVELOPER_TOKEN"),
+                service_account_json_b64=required_env("GOOGLE_ADS_SERVICE_ACCOUNT_JSON_B64"),
+                customer_id=google_ads_config["google_ads_id"],
+                login_customer_id=google_ads_config.get("google_ads_manager_id"),
+                campaign_ids=google_ads_call_ingestion_config.get("campaign_ids", []),
+                api_version=google_ads_config.get("api_version"),
+                use_proto_plus=google_ads_config.get("use_proto_plus", True),
             )
         else:
             google_ads_integration = None
@@ -122,6 +133,7 @@ def main(argv: Sequence[str]) -> int:
             log_level=log_level,
             log_dir=log_dir,
             google_ads_integration=google_ads_integration,
+            google_ads_call_ingestion_config=google_ads_call_ingestion_config,
         )
         enrichment_pipeline.start()
 

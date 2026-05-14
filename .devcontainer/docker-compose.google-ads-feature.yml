@@ -1,0 +1,13 @@
+name: google-ads-feature
+
+services:
+  call_iq:
+    command: sleep infinity
+    depends_on: !override []
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-calliq}:${POSTGRES_PASSWORD}@host.docker.internal:${PG_PORT:-5432}/${POSTGRES_DB:-calliq}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports: !override
+      - "3010:3000"
+      - "8010:8000"

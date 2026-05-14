@@ -81,14 +81,14 @@ enrichment:
 google_ads:
   activate: true
   api_version: "v24"
-  login_customer_id: "3229398443" # Service account Manager account ID (without dashes)
-  customer_id: "8759347617" # Google Ads account ID (without dashes)
+  google_ads_manager_id: "3229398443" # Service account Manager account ID (without dashes)
+  google_ads_id: "8759347617" # Google Ads account ID (without dashes)
   use_proto_plus: true
 
   call_ingestion:
     lookback_days: 7
     query_limit: 1000
-    campaign_ids: []
+    campaign_ids: ["23798190419"]
     auto_match_threshold: 80
     review_match_threshold: 60
 
