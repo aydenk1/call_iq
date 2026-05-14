@@ -76,3 +76,6 @@ whisper:
 
 enrichment: 
   activate: false # Performs transcription summarization, call tagging, and identity building.
+
+
+  
