@@ -3,6 +3,7 @@ debugpy
 fastapi
 faster-whisper>=1.2.1
 isort
+google-ads
 openai-whisper
 psycopg[binary]
 PyYAML

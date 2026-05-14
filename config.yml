@@ -75,7 +75,23 @@ whisper:
       num_workers: 10  # Uses all cpu cores
 
 enrichment: 
-  activate: false # Performs transcription summarization, call tagging, and identity building.
+  activate: true # Performs transcription summarization, call tagging, and identity building.
 
 
-  
+google_ads:
+  activate: true
+  api_version: "v24"
+  login_customer_id: "3229398443" # Service account Manager account ID (without dashes)
+  customer_id: "8759347617" # Google Ads account ID (without dashes)
+  use_proto_plus: true
+
+  call_ingestion:
+    lookback_days: 7
+    query_limit: 1000
+    campaign_ids: []
+    auto_match_threshold: 80
+    review_match_threshold: 60
+
+  conversion_upload:
+    currency_code: "USD"
+    default_conversion_value: 25.00

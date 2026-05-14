@@ -13,7 +13,7 @@ def configure_logging(level: int) -> None:
     logging.getLogger("urllib3").setLevel(level)
 
 
-def setup_worker_logging(name: str, level: int, log_dir: Path) -> None:
+def setup_worker_logging(name: str, level: int, log_dir: Path) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     logfile = log_dir / f"{name}.log"
 
@@ -32,3 +32,4 @@ def setup_worker_logging(name: str, level: int, log_dir: Path) -> None:
     logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
     logging.getLogger("urllib3").setLevel(level)
+    return logger

@@ -24,6 +24,7 @@ from pipeline.workers.ssh_downloader import SSHDownloader
 from pipeline.workers.unifi_ingest import UniFiCallIngestion, UniFiOSClient
 from pipeline.workers.whisper_transcribe import WhisperTranscribe
 from pipeline.workers.transcription_enrichment import TranscriptionEnrichmentPipeline
+from pipeline.workers.google_ads_helper import GoogleAdsIntegration
 
 
 def load_config(path: Path) -> dict[str, dict[str, Any]]:
@@ -104,10 +105,23 @@ def main(argv: Sequence[str]) -> int:
         transcriber.start()
     
     if config["enrichment"].pop("activate"):
+        if config["google_ads"].pop("activate"):
+            google_ads_integration = GoogleAdsIntegration(
+                developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
+                client_id=os.getenv("GOOGLE_ADS_CLIENT_ID", ""),
+                client_secret=os.getenv("GOOGLE_ADS_CLIENT_SECRET", ""),
+                refresh_token=os.getenv("GOOGLE_ADS_REFRESH_TOKEN", ""),
+                customer_id=os.getenv("GOOGLE_ADS_CUSTOMER_ID", ""),
+                login_customer_id=os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", ""),
+            )
+        else:
+            google_ads_integration = None
+            
         enrichment_pipeline = TranscriptionEnrichmentPipeline(
             **config["enrichment"],
             log_level=log_level,
             log_dir=log_dir,
+            google_ads_integration=google_ads_integration,
         )
         enrichment_pipeline.start()
 
